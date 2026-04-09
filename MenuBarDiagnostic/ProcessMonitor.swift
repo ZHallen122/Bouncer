@@ -22,6 +22,8 @@ class ProcessMonitor: ObservableObject {
         self.prefs = prefs
     }
 
+    deinit { stopMonitoring() }
+
     func startMonitoring() {
         sample()
         timer = Timer.scheduledTimer(withTimeInterval: prefs.refreshInterval, repeats: true) { [weak self] _ in
