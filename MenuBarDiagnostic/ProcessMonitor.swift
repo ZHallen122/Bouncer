@@ -78,7 +78,8 @@ class ProcessMonitor: ObservableObject {
                 cpuFraction: cpuFraction,
                 cpuHistory: history,
                 residentMemoryBytes: info.pti_resident_size,
-                thermalState: thermalState
+                thermalState: thermalState,
+                launchDate: app.launchDate
             ))
         }
 

@@ -1,11 +1,13 @@
 import SwiftUI
 import AppKit
+import Darwin
 
 // MARK: - HUDView (root)
 
 struct HUDView: View {
     @ObservedObject var monitor: ProcessMonitor
     @ObservedObject var prefs: PreferencesManager
+    @State private var gradientRotation: Double = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,6 +21,22 @@ struct HUDView: View {
             processListView
         }
         .frame(width: 360, height: 500)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(
+                    AngularGradient(
+                        gradient: Gradient(colors: [.blue, .cyan, .purple, .blue]),
+                        center: .center,
+                        angle: .degrees(gradientRotation)
+                    ),
+                    lineWidth: 2
+                )
+        )
+        .onAppear {
+            withAnimation(.linear(duration: 4).repeatForever(autoreverses: false)) {
+                gradientRotation = 360
+            }
+        }
     }
 
     private var currentThermalState: ProcessInfo.ThermalState {
@@ -41,6 +59,7 @@ struct HUDView: View {
                             cpuAlertThreshold: prefs.cpuAlertThreshold,
                             ramAlertThresholdMB: prefs.ramAlertThresholdMB
                         )
+                        .id(process.pid)
                         Divider().opacity(0.25)
                     }
                 }
@@ -165,6 +184,9 @@ struct HUDProcessRow: View {
     var cpuAlertThreshold: Double = 0.05
     var ramAlertThresholdMB: Double = 200.0
 
+    @State private var pulse = false
+    @State private var showDetail = false
+
     private var isHogging: Bool {
         process.cpuFraction > cpuAlertThreshold ||
         process.residentMemoryBytes > UInt64(ramAlertThresholdMB * 1024 * 1024)
@@ -172,7 +194,7 @@ struct HUDProcessRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            // Top: icon + name + CPU%
+            // Top: icon + name + chevron + CPU%
             HStack(spacing: 8) {
                 iconView
                 Text(process.name)
@@ -181,6 +203,9 @@ struct HUDProcessRow: View {
                     .truncationMode(.tail)
                     .foregroundColor(isHogging ? .white : .primary)
                 Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
                 Text(cpuString)
                     .font(.caption.monospacedDigit())
                     .foregroundColor(isHogging ? .white : cpuTextColor)
@@ -189,6 +214,7 @@ struct HUDProcessRow: View {
             // Sparkline: last 20 CPU samples
             SparklineView(values: process.cpuHistory)
                 .frame(height: 22)
+                .animation(.easeInOut(duration: 0.35), value: process.cpuHistory)
 
             // RAM bar
             RAMBarView(bytes: process.residentMemoryBytes, maxBytes: 500 * 1024 * 1024)
@@ -202,6 +228,23 @@ struct HUDProcessRow: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(rowBackground)
+        .shadow(
+            color: .red.opacity(isHogging ? (pulse ? 0.75 : 0.15) : 0),
+            radius: isHogging ? (pulse ? 14 : 3) : 0
+        )
+        .onAppear {
+            if isHogging {
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                    pulse = true
+                }
+            }
+        }
+        .onTapGesture {
+            showDetail = true
+        }
+        .sheet(isPresented: $showDetail) {
+            ProcessDetailSheet(process: process)
+        }
     }
 
     @ViewBuilder
@@ -245,6 +288,66 @@ struct HUDProcessRow: View {
             return String(format: "%.0f MB", mb)
         } else {
             return String(format: "%.2f GB", mb / 1_024)
+        }
+    }
+}
+
+// MARK: - Process Detail Sheet
+
+struct ProcessDetailSheet: View {
+    let process: MenuBarProcess
+    @Environment(\.dismiss) var dismiss
+    @State private var openFileCount: Int? = nil
+
+    var body: some View {
+        VStack(spacing: 16) {
+            // Header
+            HStack(spacing: 12) {
+                if let icon = process.icon {
+                    Image(nsImage: icon).resizable().frame(width: 48, height: 48)
+                }
+                VStack(alignment: .leading) {
+                    Text(process.name).font(.title2.bold())
+                    Text("PID: \(process.pid)").font(.caption).foregroundColor(.secondary)
+                }
+                Spacer()
+            }
+            Divider()
+            // Stats grid
+            VStack(alignment: .leading, spacing: 8) {
+                if let date = process.launchDate {
+                    LabeledContent("Launch Time", value: date, format: .dateTime.hour().minute().second())
+                }
+                LabeledContent("CPU", value: String(format: "%.1f%%", process.cpuFraction * 100))
+                let mb = Double(process.residentMemoryBytes) / 1_048_576
+                LabeledContent("RAM", value: String(format: "%.0f MB", mb))
+                if let fds = openFileCount {
+                    LabeledContent("Open Files", value: "\(fds)")
+                } else {
+                    LabeledContent("Open Files", value: "loading…")
+                }
+            }
+            Divider()
+            // Kill button
+            Button(role: .destructive) {
+                kill(process.pid, SIGTERM)
+                dismiss()
+            } label: {
+                Label("Kill Process", systemImage: "xmark.circle.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.red)
+        }
+        .padding(20)
+        .frame(width: 320)
+        .onAppear {
+            let pid = process.pid
+            DispatchQueue.global().async {
+                let size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
+                let count = size > 0 ? Int(size) / MemoryLayout<proc_fdinfo>.size : 0
+                DispatchQueue.main.async { openFileCount = count }
+            }
         }
     }
 }

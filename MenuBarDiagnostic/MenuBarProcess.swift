@@ -10,4 +10,5 @@ struct MenuBarProcess: Identifiable {
     let cpuHistory: [Double]      // rolling buffer of last 20 CPU fraction samples
     let residentMemoryBytes: UInt64
     let thermalState: ProcessInfo.ThermalState
+    let launchDate: Date?
 }
