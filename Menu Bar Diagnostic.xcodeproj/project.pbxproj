@@ -16,6 +16,12 @@
 		AA0000000000000000000033 /* HUDView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000032 /* HUDView.swift */; };
 		AA0000000000000000000041 /* PreferencesManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000040 /* PreferencesManager.swift */; };
 		AA0000000000000000000043 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000042 /* SettingsView.swift */; };
+		AA0000000000000000000052 /* SparklineView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000051 /* SparklineView.swift */; };
+		AA0000000000000000000054 /* RAMBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000053 /* RAMBarView.swift */; };
+		AA0000000000000000000056 /* ThermalHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000055 /* ThermalHeaderView.swift */; };
+		AA0000000000000000000058 /* ProcessDetailSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000057 /* ProcessDetailSheet.swift */; };
+		AA000000000000000000005A /* HUDProcessRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000059 /* HUDProcessRow.swift */; };
+		AA000000000000000000005C /* ThermalState+Display.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA000000000000000000005B /* ThermalState+Display.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -30,6 +36,12 @@
 		AA0000000000000000000032 /* HUDView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUDView.swift; sourceTree = "<group>"; };
 		AA0000000000000000000040 /* PreferencesManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreferencesManager.swift; sourceTree = "<group>"; };
 		AA0000000000000000000042 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000051 /* SparklineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparklineView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000053 /* RAMBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RAMBarView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000055 /* ThermalHeaderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThermalHeaderView.swift; sourceTree = "<group>"; };
+		AA0000000000000000000057 /* ProcessDetailSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessDetailSheet.swift; sourceTree = "<group>"; };
+		AA0000000000000000000059 /* HUDProcessRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HUDProcessRow.swift; sourceTree = "<group>"; };
+		AA000000000000000000005B /* ThermalState+Display.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ThermalState+Display.swift"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -71,6 +83,12 @@
 				AA0000000000000000000032 /* HUDView.swift */,
 				AA0000000000000000000040 /* PreferencesManager.swift */,
 				AA0000000000000000000042 /* SettingsView.swift */,
+				AA0000000000000000000051 /* SparklineView.swift */,
+				AA0000000000000000000053 /* RAMBarView.swift */,
+				AA0000000000000000000055 /* ThermalHeaderView.swift */,
+				AA0000000000000000000057 /* ProcessDetailSheet.swift */,
+				AA0000000000000000000059 /* HUDProcessRow.swift */,
+				AA000000000000000000005B /* ThermalState+Display.swift */,
 				AA0000000000000000000010 /* Info.plist */,
 			);
 			path = MenuBarDiagnostic;
@@ -153,6 +171,12 @@
 				AA0000000000000000000033 /* HUDView.swift in Sources */,
 				AA0000000000000000000041 /* PreferencesManager.swift in Sources */,
 				AA0000000000000000000043 /* SettingsView.swift in Sources */,
+				AA0000000000000000000052 /* SparklineView.swift in Sources */,
+				AA0000000000000000000054 /* RAMBarView.swift in Sources */,
+				AA0000000000000000000056 /* ThermalHeaderView.swift in Sources */,
+				AA0000000000000000000058 /* ProcessDetailSheet.swift in Sources */,
+				AA000000000000000000005A /* HUDProcessRow.swift in Sources */,
+				AA000000000000000000005C /* ThermalState+Display.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
