@@ -11,6 +11,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     let prefs = PreferencesManager()
     lazy var monitor: ProcessMonitor = ProcessMonitor(prefs: prefs)
+    lazy var anomalyDetector: AnomalyDetector = AnomalyDetector(dataStore: monitor.dataStore, prefs: prefs)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -79,16 +80,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
         center.setNotificationCategories([category])
 
-        // Create anomaly detector and wire it into the process monitor.
-        let detector = AnomalyDetector(dataStore: monitor.dataStore, prefs: prefs)
-        monitor.anomalyDetector = detector
+        // Wire the shared anomaly detector into the process monitor.
+        monitor.anomalyDetector = anomalyDetector
     }
 
     private func setupPopover() {
-        let vc = NSHostingController(rootView: StatusMenuView(monitor: monitor, prefs: prefs))
+        let vc = NSHostingController(rootView: StatusMenuView(monitor: monitor, prefs: prefs, anomalyDetector: anomalyDetector))
         let pop = NSPopover()
         pop.contentViewController = vc
-        pop.contentSize = NSSize(width: 320, height: 400)
+        pop.contentSize = NSSize(width: 300, height: 400)
         pop.behavior = .transient
         self.popover = pop
     }

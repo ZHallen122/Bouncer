@@ -11,10 +11,14 @@ import UserNotifications
 ///
 /// A notification is sent only when the app has been anomalous for 10+ consecutive
 /// minutes AND no notification has been sent for that app in the past 24 hours.
-final class AnomalyDetector: NSObject, UNUserNotificationCenterDelegate {
+final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
 
     private let dataStore: DataStore
     private let prefs: PreferencesManager
+
+    /// Bundle IDs where all 3 anomaly conditions are currently met.
+    /// Updated every evaluate() call; drives amber highlighting in StatusMenuView.
+    @Published var anomalousBundleIDs: Set<String> = []
 
     /// Tracks when each bundle ID first entered an anomalous state (all 3 conditions met).
     private var anomalyStartDates: [String: Date] = [:]
@@ -35,6 +39,7 @@ final class AnomalyDetector: NSObject, UNUserNotificationCenterDelegate {
         // Condition 3: system memory pressure must be .warning or .critical
         guard pressure == .warning || pressure == .critical else {
             anomalyStartDates.removeAll()
+            DispatchQueue.main.async { self.anomalousBundleIDs = [] }
             return
         }
 
@@ -44,6 +49,7 @@ final class AnomalyDetector: NSObject, UNUserNotificationCenterDelegate {
         let thirtyMinutesAgo = now.addingTimeInterval(-30 * 60)
 
         var liveBundleIDs = Set<String>()
+        var currentlyAnomalous = Set<String>()
 
         for process in processes {
             guard let bundleID = process.bundleIdentifier,
@@ -68,13 +74,16 @@ final class AnomalyDetector: NSObject, UNUserNotificationCenterDelegate {
                 continue
             }
 
-            // All 3 conditions met — record when anomaly started
-            let anomalyStart = anomalyStartDates[bundleID] ?? now
+            // All 3 conditions met — mark as anomalous for the view layer
+            currentlyAnomalous.insert(bundleID)
+
+            // Record when anomaly started
             if anomalyStartDates[bundleID] == nil {
                 anomalyStartDates[bundleID] = now
             }
+            let anomalyStart = anomalyStartDates[bundleID]!
 
-            // Must be anomalous for at least 10 consecutive minutes
+            // Must be anomalous for at least 10 consecutive minutes to send notification
             guard now.timeIntervalSince(anomalyStart) >= 10 * 60 else { continue }
 
             // 24-hour per-app notification cooldown
@@ -89,6 +98,10 @@ final class AnomalyDetector: NSObject, UNUserNotificationCenterDelegate {
         // Clear anomaly tracking for processes that are no longer running
         for key in anomalyStartDates.keys where !liveBundleIDs.contains(key) {
             anomalyStartDates.removeValue(forKey: key)
+        }
+
+        DispatchQueue.main.async {
+            self.anomalousBundleIDs = currentlyAnomalous
         }
     }
 

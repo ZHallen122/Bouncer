@@ -45,6 +45,10 @@ struct MenuBarProcess: Identifiable {
     /// Used by `SparklineView` to render a CPU trend chart.
     let cpuHistory: [Double]
 
+    /// Rolling buffer of the last 20 memory footprint samples in MB (oldest first).
+    /// Each value = memoryFootprintBytes / 1_048_576.0 at sample time.
+    let memoryHistory: [Double]
+
     /// Physical memory footprint in bytes, as reported by `proc_pid_rusage` /
     /// `rusage_info_v4.ri_phys_footprint`. This matches the "Memory" column in
     /// Activity Monitor and reflects the true physical cost of the process.
