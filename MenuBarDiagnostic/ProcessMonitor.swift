@@ -48,6 +48,9 @@ class ProcessMonitor: ObservableObject {
     /// process is no longer running.
     private var cpuHistories: [pid_t: [Double]] = [:]
 
+    /// Rolling memory footprint history (MB) keyed by PID. Capped at 20 samples.
+    private var memoryHistories: [pid_t: [Double]] = [:]
+
     /// Last-seen CPU tick counters from `host_statistics(HOST_CPU_LOAD_INFO)`.
     /// `nil` on the first sample; a non-nil value enables delta computation
     /// on subsequent samples.
@@ -135,6 +138,12 @@ class ProcessMonitor: ObservableObject {
             }
             let memFootprint: UInt64 = (rusageRet == 0) ? rusageInfo.ri_phys_footprint : 0
 
+            // Maintain a rolling window of the last 20 memory footprint samples (in MB).
+            var memHistory = memoryHistories[pid] ?? []
+            memHistory.append(Double(memFootprint) / 1_048_576.0)
+            if memHistory.count > 20 { memHistory.removeFirst(memHistory.count - 20) }
+            memoryHistories[pid] = memHistory
+
             newProcesses.append(MenuBarProcess(
                 pid: pid,
                 name: app.localizedName ?? "Unknown",
@@ -142,6 +151,7 @@ class ProcessMonitor: ObservableObject {
                 icon: app.icon,
                 cpuFraction: cpuFraction,
                 cpuHistory: history,
+                memoryHistory: memHistory,
                 memoryFootprintBytes: memFootprint,
                 thermalState: thermalState,
                 launchDate: app.launchDate
@@ -152,6 +162,7 @@ class ProcessMonitor: ObservableObject {
         let livePIDs = Set(newProcesses.map { $0.pid })
         previousSamples = previousSamples.filter { livePIDs.contains($0.key) }
         cpuHistories = cpuHistories.filter { livePIDs.contains($0.key) }
+        memoryHistories = memoryHistories.filter { livePIDs.contains($0.key) }
 
         let sorted = newProcesses.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
