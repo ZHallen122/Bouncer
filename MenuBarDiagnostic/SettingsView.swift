@@ -31,14 +31,15 @@ struct SettingsView: View {
 
             Section {
                 Toggle("Launch at Login", isOn: $prefs.launchAtLogin)
+                Toggle("Show Memory Pressure", isOn: $prefs.showMemoryPressureInMenuBar)
             } header: {
                 Text("System")
             } footer: {
-                Text("Automatically start Bouncer when you log in.")
+                Text("Automatically start Bouncer when you log in. Memory Pressure shows RAM usage % next to the menu bar icon.")
                     .foregroundColor(.secondary)
             }
         }
         .padding(20)
-        .frame(width: 420, height: 340)
+        .frame(width: 420, height: 360)
     }
 }

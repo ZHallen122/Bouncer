@@ -48,6 +48,7 @@ class PreferencesManager: ObservableObject {
     @AppStorage("sensitivity") var sensitivity: Sensitivity = .default_
 
     @AppStorage("launchAtLogin") var launchAtLogin: Bool = false
+    @AppStorage("showMemoryPressureInMenuBar") var showMemoryPressureInMenuBar: Bool = false
 
     /// Bundle IDs to exclude from scanning, stored as a comma-joined string.
     @AppStorage("ignoredBundleIDsRaw") var ignoredBundleIDsRaw: String = ""

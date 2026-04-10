@@ -30,12 +30,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupNotifications()
         monitor.startMonitoring()
 
-        // No badge — icon color conveys status
-        monitor.$processes
+        // Update menu bar title: show RAM % when enabled, otherwise blank.
+        Publishers.CombineLatest(monitor.$systemRAMUsedBytes, monitor.$systemRAMTotalBytes)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                self?.statusItem?.button?.title = ""
-            }
+            .sink { [weak self] _, _ in self?.updateMenuBarTitle() }
+            .store(in: &cancellables)
+
+        NotificationCenter.default
+            .publisher(for: UserDefaults.didChangeNotification)
+            .filter { _ in UserDefaults.standard.object(forKey: "showMemoryPressureInMenuBar") != nil }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateMenuBarTitle() }
             .store(in: &cancellables)
 
         // Launch at login — apply stored value on launch, then observe UserDefaults changes
@@ -169,6 +174,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         } catch {
             NSLog("SMAppService error: %@", error.localizedDescription)
+        }
+    }
+
+    private func updateMenuBarTitle() {
+        guard let button = statusItem?.button else { return }
+        if prefs.showMemoryPressureInMenuBar {
+            let used = monitor.systemRAMUsedBytes
+            let total = monitor.systemRAMTotalBytes
+            button.title = total > 0 ? "\(Int((Double(used) / Double(total) * 100).rounded()))%" : ""
+        } else {
+            button.title = ""
         }
     }
 
