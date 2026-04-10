@@ -43,6 +43,6 @@ struct SettingsView: View {
                 Label("General", systemImage: "gear")
             }
         }
-        .frame(minWidth: 400, minHeight: 320)
+        .frame(width: 420, minHeight: 320)
     }
 }

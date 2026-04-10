@@ -119,21 +119,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func openSettings() {
-        if let win = settingsWindow, win.isVisible {
+        // Re-use an existing window if it's still open.
+        if let win = settingsWindow {
             win.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-        let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 320),
-            styleMask: [.titled, .closable, .resizable, .miniaturizable],
-            backing: .buffered,
-            defer: false
-        )
+        let vc = NSHostingController(rootView: SettingsView(prefs: prefs))
+        let win = NSWindow(contentViewController: vc)
         win.title = "Bouncer Settings"
-        win.contentView = NSHostingView(rootView: SettingsView(prefs: prefs))
-        win.setContentSize(NSSize(width: 400, height: 320))
-        win.contentMinSize = NSSize(width: 400, height: 320)
+        win.styleMask = [.titled, .closable, .resizable, .miniaturizable]
+        // Prevent NSWindow from releasing itself on close (fixes EXC_BAD_ACCESS on reopen).
+        // Swift ARC manages the lifetime via settingsWindow; the ObjC object must not
+        // self-release underneath it.
+        win.isReleasedWhenClosed = false
+        win.contentMinSize = NSSize(width: 400, height: 300)
+        // NSHostingController sizes the window to fit SwiftUI content automatically.
         win.center()
         settingsWindow = win
         win.makeKeyAndOrderFront(nil)
