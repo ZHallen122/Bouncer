@@ -59,11 +59,18 @@ struct StatusMenuView: View {
 
     private var learningBanner: some View {
         let elapsed = Date().timeIntervalSince(prefs.firstLaunchDate)
-        let learningPeriod: TimeInterval = 3 * 86400
-        guard elapsed < learningPeriod else { return AnyView(EmptyView()) }
-        let daysRemaining = max(1, Int(ceil((learningPeriod - elapsed) / 86400)))
+        let duration = prefs.learningPeriodDuration
+        guard elapsed < duration else { return AnyView(EmptyView()) }
+        let remaining = duration - elapsed
+        let label: String
+        if prefs.testingMode {
+            label = "Bouncer is learning… smart alerts start in \(max(1, Int(remaining))) s"
+        } else {
+            let daysRemaining = max(1, Int(ceil(remaining / 86400)))
+            label = "Bouncer is learning… smart alerts start in \(daysRemaining) day\(daysRemaining == 1 ? "" : "s")"
+        }
         return AnyView(
-            Text("Bouncer is learning… smart alerts start in \(daysRemaining) day\(daysRemaining == 1 ? "" : "s")")
+            Text(label)
                 .font(.caption)
                 .foregroundColor(.orange)
                 .frame(maxWidth: .infinity, alignment: .leading)
