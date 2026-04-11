@@ -21,6 +21,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: NSWindow?
     private var cancellables = Set<AnyCancellable>()
     var pendingAnomalyAlert = false
+    private var testIconColor: String = "normal"
 
     let prefs = PreferencesManager()
     lazy var monitor: ProcessMonitor = ProcessMonitor(prefs: prefs)
@@ -74,7 +75,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
-        // Update icon tint: Red (swap rapid growth) > Orange (swap active or pending anomaly) > Green.
         Publishers.CombineLatest(swapMonitor.$swapState, anomalyDetector.$anomalousBundleIDs)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _, anomalousBundleIDs in
@@ -85,6 +85,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     self.pendingAnomalyAlert = false
                 }
                 self.updateIconTint()
+            }
+            .store(in: &cancellables)
+
+        NotificationCenter.default
+            .publisher(for: UserDefaults.didChangeNotification)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateIconTint() }
+            .store(in: &cancellables)
+
+        NotificationCenter.default
+            .publisher(for: NSNotification.Name("TestColorOverride"))
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] notification in
+                if let color = notification.object as? String {
+                    self?.testIconColor = color
+                    self?.updateIconTint()
+                }
             }
             .store(in: &cancellables)
     }
@@ -219,10 +236,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateIconTint() {
-        statusItem?.button?.contentTintColor = iconColor(
-            swapState: swapMonitor.swapState,
-            pendingAnomalyAlert: pendingAnomalyAlert
-        )
+        DispatchQueue.main.async {
+            let color: NSColor
+            if self.prefs.testingMode {
+                if self.testIconColor == "red" {
+                    color = .systemRed
+                } else if self.testIconColor == "orange" {
+                    color = .systemOrange
+                } else {
+                    color = iconColor(swapState: self.swapMonitor.swapState, pendingAnomalyAlert: self.pendingAnomalyAlert)
+                }
+            } else {
+                color = iconColor(swapState: self.swapMonitor.swapState, pendingAnomalyAlert: self.pendingAnomalyAlert)
+            }
+            
+            guard let baseIcon = NSImage(systemSymbolName: "stethoscope", accessibilityDescription: "Bouncer") else { return }
+            
+            if color == .systemGreen {
+                // Default normal state uses the system-managed template (adapts to light/dark mode)
+                baseIcon.isTemplate = true
+                self.statusItem?.button?.image = baseIcon
+            } else {
+                // Alert states need custom color bypassing the template force-render
+                let config = NSImage.SymbolConfiguration(paletteColors: [color])
+                if let tintedIcon = baseIcon.withSymbolConfiguration(config) {
+                    tintedIcon.isTemplate = false
+                    self.statusItem?.button?.image = tintedIcon
+                } else {
+                    baseIcon.isTemplate = false
+                    self.statusItem?.button?.image = baseIcon
+                }
+            }
+        }
     }
 
     private func applyLaunchAtLogin(_ enabled: Bool) {
@@ -238,13 +283,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateMenuBarTitle() {
-        guard let button = statusItem?.button else { return }
-        if prefs.showMemoryPressureInMenuBar {
-            let used = monitor.systemRAMUsedBytes
-            let total = monitor.systemRAMTotalBytes
-            button.title = total > 0 ? "\(Int((Double(used) / Double(total) * 100).rounded()))%" : ""
-        } else {
-            button.title = ""
+        DispatchQueue.main.async {
+            guard let button = self.statusItem?.button else { return }
+            if self.prefs.showMemoryPressureInMenuBar {
+                let used = self.monitor.systemRAMUsedBytes
+                let total = self.monitor.systemRAMTotalBytes
+                button.title = total > 0 ? "\(Int((Double(used) / Double(total) * 100).rounded()))%" : ""
+            } else {
+                button.title = ""
+            }
         }
     }
 
