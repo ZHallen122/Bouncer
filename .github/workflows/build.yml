@@ -1,0 +1,147 @@
+name: macOS Build & Release (Sparkle)
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger only on version tags (e.g., v1.0.0)
+  workflow_dispatch: # Allow manual trigger on GitHub Actions page for testing
+
+jobs:
+  build:
+    name: Build, Sign and Notarize
+    runs-on: macos-latest
+
+    env:
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+      APP_NAME: "Menu Bar Diagnostic"
+      SCHEME: "MenuBarDiagnostic"
+      ARCHIVE_PATH: "build/MenuBarDiagnostic.xcarchive"
+      EXPORT_PATH: "build/export"
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure App Store Connect API Key
+        env:
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys/
+          echo "$ASC_PRIVATE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8
+
+      - name: Create ExportOptions.plist
+        run: |
+          # Automatically inject teamID into ExportOptions.plist for xcodebuild
+          cat <<EOF > ExportOptions.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>method</key>
+              <string>developer-id</string>
+              <key>destination</key>
+              <string>export</string>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Build and Archive
+        run: |
+          xcodebuild archive \
+            -project "$APP_NAME.xcodeproj" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -archivePath "$ARCHIVE_PATH" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8 \
+            -authenticationKeyID ${{ secrets.ASC_KEY_ID }} \
+            -authenticationKeyIssuerID ${{ secrets.ASC_ISSUER_ID }}
+
+      - name: Export Archive
+        run: |
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE_PATH" \
+            -exportOptionsPlist ExportOptions.plist \
+            -exportPath "$EXPORT_PATH" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8 \
+            -authenticationKeyID ${{ secrets.ASC_KEY_ID }} \
+            -authenticationKeyIssuerID ${{ secrets.ASC_ISSUER_ID }}
+
+      - name: Notarize App
+        run: |
+          # Zip the unstapled app for the notarization service
+          /usr/bin/ditto -c -k --keepParent "$EXPORT_PATH/$APP_NAME.app" "build/$APP_NAME-notarize.zip"
+          
+          # Submit for notarization (This usually takes 2-5 minutes)
+          xcrun notarytool submit "build/$APP_NAME-notarize.zip" \
+            --key ~/".appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8" \
+            --key-id ${{ secrets.ASC_KEY_ID }} \
+            --issuer ${{ secrets.ASC_ISSUER_ID }} \
+            --wait
+
+          # Staple the notarization ticket to the App
+          xcrun stapler staple "$EXPORT_PATH/$APP_NAME.app"
+          
+      - name: Create .zip for Sparkle
+        run: |
+          # Create a ZIP containing the stapled App (Standard format for Sparkle)
+          /usr/bin/ditto -c -k --keepParent "$EXPORT_PATH/$APP_NAME.app" "build/$APP_NAME.zip"
+
+      - name: Create .dmg
+        run: |
+          brew install create-dmg
+          create-dmg \
+            --volname "$APP_NAME" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "$APP_NAME.app" 175 190 \
+            --hide-extension "$APP_NAME.app" \
+            --app-drop-link 425 190 \
+            "build/$APP_NAME.dmg" \
+            "$EXPORT_PATH/$APP_NAME.app"
+            
+          # Submit the DMG for notarization (Recommended to avoid warnings on mount)
+          xcrun notarytool submit "build/$APP_NAME.dmg" \
+            --key ~/".appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8" \
+            --key-id ${{ secrets.ASC_KEY_ID }} \
+            --issuer ${{ secrets.ASC_ISSUER_ID }} \
+            --wait
+            
+          xcrun stapler staple "build/$APP_NAME.dmg"
+
+      - name: Generate Sparkle EdDSA Signature
+        env:
+          SPARKLE_EDDSA_KEY: ${{ secrets.SPARKLE_EDDSA_KEY }}
+        run: |
+          mkdir -p /tmp/sparkle
+          # Download the Sparkle tools matching the SPM project version (resolved as 2.9.1)
+          curl -L -o /tmp/sparkle/Sparkle.tar.xz "https://github.com/sparkle-project/Sparkle/releases/download/2.9.1/Sparkle-2.9.1.tar.xz"
+          tar -xf /tmp/sparkle/Sparkle.tar.xz -C /tmp/sparkle/
+          
+          # Generate the EdDSA signature for the update zip using the private key
+          SIGNATURE=$(/tmp/sparkle/bin/sign_update -s "$SPARKLE_EDDSA_KEY" "build/$APP_NAME.zip")
+          echo "SPARKLE_SIGNATURE=$SIGNATURE" >> $GITHUB_ENV
+          
+          # Output signature into a text file for easy download from Actions page
+          echo "$SIGNATURE" > build/sparkle_signature.txt
+          
+          # You can add a script here to auto-update appcast.xml, or manually enter the signature
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') # Ensure this runs only on tag pushes
+        with:
+          files: |
+            build/*.dmg
+            build/*.zip
+            build/sparkle_signature.txt
+          body: |
+            ## Release Overview
+            This is the latest automated build. Remember to update your \`appcast.xml\` with the following details.
+            
+            **Sparkle EdDSA Signature**: \`${{ env.SPARKLE_SIGNATURE }}\`
+          draft: true
+          generate_release_notes: true
