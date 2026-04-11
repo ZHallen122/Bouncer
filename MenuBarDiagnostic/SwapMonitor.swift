@@ -37,10 +37,11 @@ class SwapMonitor: ObservableObject {
     /// Exposed for unit tests to verify cooldown logic.
     var lastSwapNotificationDate: Date? = nil
 
-    // Rolling window samples: (timestamp, bytes)
+    // Rolling window: fixed-size ring of the last `maxSamples` readings.
+    // At 30s polling, 10 samples = 5-minute window. No timestamp math needed for trimming.
     private var swapSamples: [(timestamp: Date, bytes: UInt64)] = []
     private var compressedSamples: [(timestamp: Date, bytes: UInt64)] = []
-    private let windowDuration: TimeInterval = 5 * 60  // 5 minutes
+    private let maxSamples = 10  // 10 × 30s = 5 minutes
 
     // If the gap since the last sample exceeds this, assume a sleep/wake occurred and purge stale window.
     private let maxSampleGap: TimeInterval = 90  // 3× the 30s polling interval
@@ -71,7 +72,7 @@ class SwapMonitor: ObservableObject {
     func injectSample(swapBytes: UInt64, compressedBytes injectedCompressedBytes: UInt64, at timestamp: Date = Date()) {
         swapSamples.append((timestamp: timestamp, bytes: swapBytes))
         compressedSamples.append((timestamp: timestamp, bytes: injectedCompressedBytes))
-        trimWindow()
+        capWindow()
         swapUsedBytes = swapBytes
         compressedBytes = injectedCompressedBytes
         refreshSwapState()
@@ -169,7 +170,7 @@ class SwapMonitor: ObservableObject {
 
             self.swapSamples.append((timestamp: now, bytes: swapUsed))
             self.compressedSamples.append((timestamp: now, bytes: compressed))
-            self.trimWindow()
+            self.capWindow()
             self.swapUsedBytes = swapUsed
             self.swapTotalBytes = swapTotal
             self.compressedBytes = compressed
@@ -183,14 +184,15 @@ class SwapMonitor: ObservableObject {
         }
     }
 
-    /// Removes samples older than `windowDuration` before the most recent sample timestamp.
-    private func trimWindow() {
-        let latestSwap = swapSamples.last?.timestamp ?? Date.distantPast
-        let latestCompressed = compressedSamples.last?.timestamp ?? Date.distantPast
-        let latestTime = max(latestSwap, latestCompressed)
-        let cutoff = latestTime.addingTimeInterval(-windowDuration)
-        swapSamples.removeAll { $0.timestamp < cutoff }
-        compressedSamples.removeAll { $0.timestamp < cutoff }
+    /// Keeps only the most recent `maxSamples` entries in each window.
+    /// Honest about what we're actually doing: count-based cap, not time-based trim.
+    private func capWindow() {
+        if swapSamples.count > maxSamples {
+            swapSamples.removeFirst(swapSamples.count - maxSamples)
+        }
+        if compressedSamples.count > maxSamples {
+            compressedSamples.removeFirst(compressedSamples.count - maxSamples)
+        }
     }
 
     private func swapDelta() -> UInt64 {
