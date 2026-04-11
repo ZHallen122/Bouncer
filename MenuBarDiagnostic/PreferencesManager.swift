@@ -63,6 +63,20 @@ class PreferencesManager: ObservableObject {
         return now
     }
 
+    /// Resets firstLaunchDate to now, restarting the 3-day learning period.
+    /// Use with Testing Mode OFF to verify that alerts are suppressed during learning.
+    func resetLearningPeriod() {
+        UserDefaults.standard.set(Date(), forKey: "firstLaunchDate")
+        objectWillChange.send()
+    }
+
+    /// How many hours remain in the learning period (0 if already past it).
+    var learningPeriodRemainingHours: Int {
+        let elapsed = Date().timeIntervalSince(firstLaunchDate)
+        let remaining = max(0, 3 * 86400 - elapsed)
+        return Int(remaining / 3600)
+    }
+
     /// True during the 3-day baseline learning period after first launch.
     /// Always returns false when testingMode is enabled.
     var isInLearningPeriod: Bool {

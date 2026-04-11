@@ -53,16 +53,28 @@ struct SettingsView: View {
                         anomalyDetector.fireTestAlert()
                     }
                 }
+                Button("Reset Learning Period") {
+                    prefs.resetLearningPeriod()
+                }
+                if prefs.isInLearningPeriod {
+                    Text("In learning period — \(prefs.learningPeriodRemainingHours) h remaining")
+                        .foregroundColor(.secondary)
+                        .font(.caption)
+                } else {
+                    Text("Learning period complete")
+                        .foregroundColor(.secondary)
+                        .font(.caption)
+                }
             } header: {
                 Text("Developer")
             } footer: {
                 Text(prefs.testingMode
-                     ? "Learning period and memory pressure guard are bypassed. Time windows collapsed to seconds. \"Fire Test Alert Now\" sends a synthetic notification immediately."
-                     : "Enable to exercise alert detection without the 3-day learning period or real memory pressure.")
+                     ? "Testing Mode ON: learning period, memory pressure, and time windows are bypassed. Use \"Fire Test Alert Now\" for an instant notification. Turn Testing Mode OFF after resetting to verify that alerts are suppressed during the 3-day window."
+                     : "\"Reset Learning Period\" restarts the 3-day window (keep Testing Mode OFF) to verify that no alerts fire while learning is active.")
                     .foregroundColor(.secondary)
             }
         }
         .padding(20)
-        .frame(width: 420, height: prefs.testingMode ? 430 : 400)
+        .frame(width: 420, height: prefs.testingMode ? 480 : 450)
     }
 }
