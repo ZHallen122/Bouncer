@@ -2,6 +2,10 @@
 
 A native macOS menu bar app that watches other menu bar apps for memory anomalies and sends actionable alerts before they slow your system down.
 
+<img width="336" height="453" alt="image" src="https://github.com/user-attachments/assets/ff43e499-4efa-4b09-bead-4c5f4578b45e" />
+
+<img width="453" height="409" alt="image" src="https://github.com/user-attachments/assets/e1e234f0-3b9d-4719-9463-542c7384582a" />
+
 ---
 
 ## What it does
