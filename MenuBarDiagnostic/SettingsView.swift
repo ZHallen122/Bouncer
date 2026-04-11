@@ -64,7 +64,7 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
                     .onChange(of: localTestColor) { newColor in
-                        NotificationCenter.default.post(name: NSNotification.Name("TestColorOverride"), object: newColor)
+                        NotificationCenter.default.post(name: .testColorOverride, object: newColor)
                     }
                 }
                 Button("Reset Learning Period") {

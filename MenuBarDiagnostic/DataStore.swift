@@ -145,6 +145,7 @@ final class DataStore {
                sqlite3_bind_int64(stmt, 5, now) != SQLITE_OK {
                 NSLog("DataStore: bind failed in insertSamples: %@", String(cString: sqlite3_errmsg(db)))
                 sqlite3_reset(stmt)
+                sqlite3_clear_bindings(stmt)
                 continue
             }
             let rc = sqlite3_step(stmt)
@@ -195,6 +196,7 @@ final class DataStore {
         defer { sqlite3_finalize(stmt) }
         if sqlite3_bind_int64(stmt, 1, cutoff) != SQLITE_OK {
             NSLog("DataStore: bind failed in rebuildBaselines (fetch): %@", String(cString: sqlite3_errmsg(db)))
+            return
         }
 
         // Group rows into [bundleID+date: [Double]]
@@ -246,6 +248,7 @@ final class DataStore {
                sqlite3_bind_double(uStmt, 4, p90) != SQLITE_OK {
                 NSLog("DataStore: bind failed in rebuildBaselines (upsert): %@", String(cString: sqlite3_errmsg(db)))
                 sqlite3_reset(uStmt)
+                sqlite3_clear_bindings(uStmt)
                 continue
             }
             let urc = sqlite3_step(uStmt)

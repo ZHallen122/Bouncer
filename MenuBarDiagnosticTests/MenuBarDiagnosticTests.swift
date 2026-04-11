@@ -870,8 +870,8 @@ final class MenuBarDiagnosticTests: XCTestCase {
         // Verify that iconColor() returns green under those conditions.
         let detector = AnomalyDetector(dataStore: DataStore(path: ":memory:"), prefs: PreferencesManager())
 
-        // Force an anomaly so detector has a non-empty set, then evaluate with no processes to clear it.
-        // After clearing, pendingAnomalyAlert should be false → green.
+        // Detector starts empty; evaluating with no processes confirms no anomaly is introduced.
+        // Verifies that iconColor() returns green when anomalousBundleIDs is empty.
         detector.evaluate(processes: [], pressure: .normal)
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         XCTAssertTrue(detector.anomalousBundleIDs.isEmpty,
