@@ -10,8 +10,8 @@ import ServiceManagement
 /// together `ProcessMonitor`, `AnomalyDetector`, and `SwapMonitor`. Responsibilities include:
 /// - Registering `UNUserNotificationCenter` categories (`MEMORY_ANOMALY`, `SWAP_ACTIVE`) and
 ///   handling notification responses (Restart Now, Ignore, Quit Top App, View All, Dismiss).
-/// - Driving the icon tint: red (swap rapid growth) → orange (swap active) → yellow (anomalies)
-///   → green (all clear).
+/// - Driving the icon tint: red (swap rapid growth) → orange (swap active or unacknowledged
+///   anomaly alert) → green (all clear).
 /// - Managing the settings window lifecycle (single-instance, re-use on re-open).
 /// - Applying and observing the launch-at-login preference via `SMAppService`.
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -20,6 +20,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var hudWindow: HUDWindow?
     private var settingsWindow: NSWindow?
     private var cancellables = Set<AnyCancellable>()
+    private var pendingAnomalyAlert = false
 
     let prefs = PreferencesManager()
     lazy var monitor: ProcessMonitor = ProcessMonitor(prefs: prefs)
@@ -68,17 +69,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             .store(in: &cancellables)
 
-        // Update icon tint: Red (swap rapid growth) > Orange (swap active) > Yellow (anomalies) > Green.
+        // Update icon tint: Red (swap rapid growth) > Orange (swap active or pending anomaly) > Green.
         Publishers.CombineLatest(swapMonitor.$swapState, anomalyDetector.$anomalousBundleIDs)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] swapState, anomalousBundleIDs in
-                let color: NSColor
-                switch swapState {
-                case .rapidGrowth: color = .systemRed
-                case .active:      color = .systemOrange
-                case .none:        color = anomalousBundleIDs.isEmpty ? .systemGreen : .systemYellow
+            .sink { [weak self] _, anomalousBundleIDs in
+                guard let self else { return }
+                if !anomalousBundleIDs.isEmpty {
+                    self.pendingAnomalyAlert = true
+                } else {
+                    self.pendingAnomalyAlert = false
                 }
-                self?.statusItem?.button?.contentTintColor = color
+                self.updateIconTint()
             }
             .store(in: &cancellables)
     }
@@ -205,9 +206,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if popover.isShown {
             popover.performClose(sender)
         } else {
+            pendingAnomalyAlert = false
+            updateIconTint()
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
         }
+    }
+
+    private func updateIconTint() {
+        let color: NSColor
+        switch swapMonitor.swapState {
+        case .rapidGrowth: color = .systemRed
+        case .active:      color = .systemOrange
+        case .none:        color = pendingAnomalyAlert ? .systemOrange : .systemGreen
+        }
+        statusItem?.button?.contentTintColor = color
     }
 
     private func applyLaunchAtLogin(_ enabled: Bool) {
