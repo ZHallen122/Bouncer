@@ -8,6 +8,7 @@ struct StatusMenuView: View {
     var onSettingsTap: () -> Void
     var onClosePopover: () -> Void = {}
     @State private var expandedPID: pid_t? = nil
+    @State private var hoveredFooterButton: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -19,6 +20,7 @@ struct StatusMenuView: View {
             footerBar
         }
         .frame(width: 300)
+        .onDisappear { hoveredFooterButton = nil }
     }
 
     // MARK: - Summary Header
@@ -53,11 +55,11 @@ struct StatusMenuView: View {
         return AnyView(
             Text("Bouncer is learning… smart alerts start in \(daysRemaining) day\(daysRemaining == 1 ? "" : "s")")
                 .font(.caption)
-                .foregroundColor(.primary)
+                .foregroundColor(.orange)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
-                .background(Color.yellow.opacity(0.85))
+                .background(Color.orange.opacity(0.12))
         )
     }
 
@@ -84,11 +86,19 @@ struct StatusMenuView: View {
     @ViewBuilder
     private var processListOrEmpty: some View {
         if monitor.processes.isEmpty {
-            Text("No menu bar processes found")
-                .foregroundColor(.secondary)
-                .font(.caption)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.vertical, 16)
+            VStack(spacing: 6) {
+                Image(systemName: "tray")
+                    .font(.title2)
+                    .foregroundColor(.secondary)
+                Text("No apps running")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                Text("Apps appear here as they use memory")
+                    .font(.caption)
+                    .foregroundColor(Color.secondary.opacity(0.7))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 24)
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -135,24 +145,27 @@ struct StatusMenuView: View {
                 NSApp.orderFrontStandardAboutPanel(nil)
             }
             .buttonStyle(.plain)
-            .foregroundColor(.secondary)
+            .foregroundColor(hoveredFooterButton == "about" ? .primary : .secondary)
             .font(.caption)
+            .onHover { hoveredFooterButton = $0 ? "about" : nil }
             Spacer()
             Button("Settings") {
                 onClosePopover()
                 onSettingsTap()
             }
             .buttonStyle(.plain)
-            .foregroundColor(.secondary)
+            .foregroundColor(hoveredFooterButton == "settings" ? .primary : .secondary)
             .font(.caption)
+            .onHover { hoveredFooterButton = $0 ? "settings" : nil }
             Spacer()
             Button("Quit") {
                 onClosePopover()
                 NSApp.terminate(nil)
             }
             .buttonStyle(.plain)
-            .foregroundColor(.secondary)
+            .foregroundColor(hoveredFooterButton == "quit" ? .primary : .secondary)
             .font(.caption)
+            .onHover { hoveredFooterButton = $0 ? "quit" : nil }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -173,9 +186,10 @@ private struct ProcessRowView: View {
         VStack(spacing: 0) {
             rowContent
                 .contentShape(Rectangle())
-                .onTapGesture { onTap() }
+                .onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { onTap() } }
             if isExpanded {
                 detailCard
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .background(isAnomalous ? Color.orange.opacity(0.08) : Color.clear)
@@ -193,6 +207,11 @@ private struct ProcessRowView: View {
             Text(process.memoryString)
                 .font(.caption.monospacedDigit())
                 .foregroundColor(isAnomalous ? .orange : .secondary)
+            Image(systemName: "chevron.right")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                .animation(.easeInOut(duration: 0.2), value: isExpanded)
             SparklineView(values: process.memoryHistory, color: isAnomalous ? .orange : .blue)
                 .frame(width: 40, height: 16)
         }
@@ -227,8 +246,12 @@ private struct ProcessRowView: View {
                     .font(.caption.monospacedDigit())
                 Spacer()
                 if let b = baseline {
-                    Text(String(format: "Baseline p90: %.0f MB", b.p90MB))
+                    Text(String(format: "Normal: %.0f MB avg", b.p90MB))
                         .font(.caption.monospacedDigit())
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("Still learning baseline…")
+                        .font(.caption)
                         .foregroundColor(.secondary)
                 }
             }
@@ -242,20 +265,25 @@ private struct ProcessRowView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .tint(.red)
+                .help("Force-quit this app")
                 Button("Restart App") {
                     restartApp()
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
                 .tint(.orange)
-                Button("Add to Ignore List") {
-                    if let bid = process.bundleIdentifier,
-                       !prefs.ignoredBundleIDs.contains(bid) {
-                        prefs.ignoredBundleIDs.append(bid)
+                .help("Quit and relaunch this app")
+                if isAnomalous {
+                    Button("Add to Ignore List") {
+                        if let bid = process.bundleIdentifier,
+                           !prefs.ignoredBundleIDs.contains(bid) {
+                            prefs.ignoredBundleIDs.append(bid)
+                        }
                     }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Stop alerting about this app")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
             }
         }
         .padding(.horizontal, 12)

@@ -149,7 +149,7 @@ final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCente
 
     private func sendNotification(bundleID: String, appName: String, currentMB: Double, ratio: Double) {
         let content = UNMutableNotificationContent()
-        content.title = "\(appName) memory abnormal"
+        content.title = "\(appName) is using too much memory"
         if currentMB >= 1000 {
             let gb = currentMB / 1024.0
             content.body = String(format: "Using %.1f GB — %.1fx its normal level. System memory pressure is elevated.", gb, ratio)
@@ -166,7 +166,11 @@ final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCente
             trigger: nil
         )
         guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
-        UNUserNotificationCenter.current().add(request)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                NSLog("AnomalyDetector: failed to schedule notification for %@: %@", bundleID, error.localizedDescription)
+            }
+        }
     }
 
     // MARK: - UNUserNotificationCenterDelegate
@@ -183,8 +187,14 @@ final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCente
         switch response.actionIdentifier {
         case "RESTART_NOW":
             restartApp(bundleID: bundleID, appName: appName)
+        case "IGNORE":
+            DispatchQueue.main.async {
+                if !bundleID.isEmpty && !self.prefs.ignoredBundleIDs.contains(bundleID) {
+                    self.prefs.ignoredBundleIDs.append(bundleID)
+                }
+            }
         default:
-            break // IGNORE or default dismissal — do nothing
+            break // default dismissal — do nothing
         }
         completionHandler()
     }
@@ -206,8 +216,9 @@ final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCente
         // Pre-compute the app URL before terminating so we don't need to capture workspace.
         let appURL = workspace.urlForApplication(withBundleIdentifier: bundleID)
         let terminated = app.terminate()
-        if !terminated {
-            NSLog("AnomalyDetector: terminate() returned false for %@ (%@)", appName, bundleID)
+        guard terminated else {
+            NSLog("AnomalyDetector: terminate() returned false for %@ (%@); skipping relaunch", appName, bundleID)
+            return
         }
 
         DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
