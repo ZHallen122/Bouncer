@@ -121,6 +121,14 @@ final class DataStore {
         }
     }
 
+    /// Marks an app as `"ignored"` in app_lifecycle. Ignored apps are never alerted on,
+    /// and lifecycle transitions (version change, stale return) will not reset this state.
+    func markIgnored(bundleID: String) {
+        queue.async { [weak self] in
+            self?.doMarkIgnored(bundleID: bundleID)
+        }
+    }
+
     /// Returns `true` if the app is in `"learning"` state and `now - learning_started_at < duration`.
     func isInPerAppLearningPeriod(bundleID: String, duration: TimeInterval) -> Bool {
         var result = false
@@ -486,6 +494,30 @@ final class DataStore {
         let rc = sqlite3_step(stmt)
         if rc != SQLITE_DONE && rc != SQLITE_ROW {
             NSLog("DataStore: doMarkStaleApps failed (%d): %@", rc, String(cString: sqlite3_errmsg(db)))
+        }
+    }
+
+    private func doMarkIgnored(bundleID: String) {
+        guard let db = db else { return }
+        let nowTS = Int64(Date().timeIntervalSince1970)
+        let sql = """
+            INSERT INTO app_lifecycle (bundle_id, state, version, learning_started_at, last_seen_at)
+            VALUES (?, 'ignored', NULL, NULL, ?)
+            ON CONFLICT(bundle_id) DO UPDATE SET
+                state = 'ignored',
+                last_seen_at = excluded.last_seen_at;
+            """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            NSLog("DataStore: prepare failed in doMarkIgnored: %@", String(cString: sqlite3_errmsg(db)))
+            return
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, (bundleID as NSString).utf8String, -1, nil)
+        sqlite3_bind_int64(stmt, 2, nowTS)
+        let rc = sqlite3_step(stmt)
+        if rc != SQLITE_DONE && rc != SQLITE_ROW {
+            NSLog("DataStore: doMarkIgnored failed (%d): %@", rc, String(cString: sqlite3_errmsg(db)))
         }
     }
 

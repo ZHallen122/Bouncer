@@ -218,6 +218,12 @@ final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCente
                     self.prefs.ignoredBundleIDs.append(bundleID)
                 }
             }
+            // Mirror the ignore into app_lifecycle so the state machine stays consistent.
+            // This prevents lifecycle transitions (version change, stale return) from
+            // accidentally resetting an ignored app back to "learning".
+            if !bundleID.isEmpty {
+                dataStore.markIgnored(bundleID: bundleID)
+            }
         default:
             break // default dismissal — do nothing
         }

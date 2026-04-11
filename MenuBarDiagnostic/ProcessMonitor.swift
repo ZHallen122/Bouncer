@@ -264,7 +264,11 @@ class ProcessMonitor: ObservableObject {
 
                 if var cached = lifecycleCache[bundleID] {
                     // App is known to us — check for version change or stale return.
-                    if let newVer = version, let cachedVer = cached.version, newVer != cachedVer {
+                    // Ignored apps are exempt from all automatic state transitions:
+                    // a user-curated ignore list must not be silently cleared by an update or dormancy.
+                    if cached.state == "ignored" {
+                        // No-op: stay ignored regardless of version change or stale flag.
+                    } else if let newVer = version, let cachedVer = cached.version, newVer != cachedVer {
                         // Version changed: reset to learning, announce update.
                         dataStore.resetToLearning(bundleID: bundleID, version: version)
                         cached = LifecycleEntry(state: "learning", version: version, learningStartedAt: now)
@@ -281,7 +285,12 @@ class ProcessMonitor: ObservableObject {
                 } else {
                     // New to cache: query DataStore to see if we've seen this app before.
                     if let entry = dataStore.lifecycleEntry(for: bundleID) {
-                        if entry.state == "stale" {
+                        if entry.state == "ignored" {
+                            // Already ignored in DB (e.g., app restarted): restore ignored state.
+                            lifecycleCache[bundleID] = LifecycleEntry(state: "ignored",
+                                                                       version: entry.version,
+                                                                       learningStartedAt: nil)
+                        } else if entry.state == "stale" {
                             // Known but dormant: restart learning.
                             dataStore.resetToLearning(bundleID: bundleID, version: version)
                             lifecycleCache[bundleID] = LifecycleEntry(state: "learning",
