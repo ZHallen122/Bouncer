@@ -2,6 +2,11 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var prefs: PreferencesManager
+    var anomalyDetector: AnomalyDetector
+
+    // Ticks every second so the learning-period countdown stays live.
+    private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+    @State private var now = Date()
 
     var body: some View {
         Form {
@@ -44,8 +49,61 @@ struct SettingsView: View {
                 Text("Displays RAM usage % next to the menu bar icon.")
                     .foregroundColor(.secondary)
             }
+
+            Section {
+                Toggle("Testing Mode", isOn: $prefs.testingMode)
+                if prefs.testingMode {
+                    Button("Fire Test Alert Now") {
+                        anomalyDetector.fireTestAlert()
+                    }
+                }
+                Button("Reset Learning Period") {
+                    prefs.resetLearningPeriod()
+                    now = Date()
+                }
+                learningPeriodStatus
+            } header: {
+                Text("Developer")
+            } footer: {
+                Text(developerFooter)
+                    .foregroundColor(.secondary)
+            }
         }
         .padding(20)
-        .frame(width: 420, height: 360)
+        .frame(width: 420, height: prefs.testingMode ? 480 : 450)
+        .onReceive(timer) { tick in
+            now = tick
+        }
+    }
+
+    @ViewBuilder
+    private var learningPeriodStatus: some View {
+        let inPeriod = now.timeIntervalSince(prefs.firstLaunchDate) < prefs.learningPeriodDuration
+        if inPeriod {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(Color.orange)
+                    .frame(width: 7, height: 7)
+                Text("Learning — \(prefs.learningPeriodRemainingLabel(now: now))")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+            }
+        } else {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 7, height: 7)
+                Text("Learning period complete — alerts active")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+            }
+        }
+    }
+
+    private var developerFooter: String {
+        if prefs.testingMode {
+            return "Testing Mode ON: learning period is 30 s, memory pressure guard bypassed, time windows collapsed to seconds. Reset → watch countdown → alerts fire automatically."
+        }
+        return "Reset Learning Period restarts the 3-day window (Testing Mode OFF) to verify alerts are suppressed during learning."
     }
 }

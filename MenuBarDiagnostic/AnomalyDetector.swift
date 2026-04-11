@@ -48,17 +48,25 @@ final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCente
             return
         }
 
-        // Condition 3: system memory pressure must be .warning or .critical
-        guard pressure == .warning || pressure == .critical else {
-            anomalyStartDates.removeAll()
-            DispatchQueue.main.async { self.anomalousBundleIDs = [] }
-            return
+        let testing = prefs.testingMode
+
+        // Condition 3: system memory pressure must be .warning or .critical.
+        // Bypassed in testing mode so you don't need to simulate system pressure.
+        if !testing {
+            guard pressure == .warning || pressure == .critical else {
+                anomalyStartDates.removeAll()
+                DispatchQueue.main.async { self.anomalousBundleIDs = [] }
+                return
+            }
         }
 
         let ignoredIDs = Set(prefs.ignoredBundleIDs)
         let multiplier = prefs.sensitivity.anomalyMultiplier
         let now = Date()
-        let thirtyMinutesAgo = now.addingTimeInterval(-30 * 60)
+        // In testing mode: samples persist every 5 s, so use a 2-minute window to
+        // accumulate enough data points for a meaningful trend (normally 30 min).
+        let trendingWindow: TimeInterval = testing ? -2 * 60 : -30 * 60
+        let thirtyMinutesAgo = now.addingTimeInterval(trendingWindow)
 
         var liveBundleIDs = Set<String>()
         var currentlyAnomalous = Set<String>()
@@ -95,8 +103,9 @@ final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCente
             }
             let anomalyStart = anomalyStartDates[bundleID]!
 
-            // Must be anomalous for at least 10 consecutive minutes to send notification
-            guard now.timeIntervalSince(anomalyStart) >= 10 * 60 else { continue }
+            // Must be anomalous for 10 consecutive minutes (or 10 s in testing mode).
+            let anomalyDurationGate: TimeInterval = testing ? 10 : 10 * 60
+            guard now.timeIntervalSince(anomalyStart) >= anomalyDurationGate else { continue }
 
             // 24-hour per-app notification cooldown
             if let lastSent = lastNotificationDates[bundleID],
@@ -147,7 +156,20 @@ final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCente
 
     // MARK: - Notifications
 
-    private func sendNotification(bundleID: String, appName: String, currentMB: Double, ratio: Double) {
+    /// Fires a synthetic "Safari is using too much memory" notification so you can
+    /// verify the full notification→action flow without waiting for real anomaly conditions.
+    /// Only works when testingMode is enabled.
+    func fireTestAlert() {
+        guard prefs.testingMode else { return }
+        sendNotification(
+            bundleID: "com.apple.Safari",
+            appName: "Safari [TEST]",
+            currentMB: 1234,
+            ratio: 3.7
+        )
+    }
+
+    func sendNotification(bundleID: String, appName: String, currentMB: Double, ratio: Double) {
         let content = UNMutableNotificationContent()
         content.title = "\(appName) is using too much memory"
         if currentMB >= 1000 {

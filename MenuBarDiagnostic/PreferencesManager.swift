@@ -63,10 +63,40 @@ class PreferencesManager: ObservableObject {
         return now
     }
 
-    /// True during the 3-day baseline learning period after first launch.
-    var isInLearningPeriod: Bool {
-        Date().timeIntervalSince(firstLaunchDate) < 3 * 86400
+    /// Resets firstLaunchDate to now, restarting the 3-day learning period.
+    /// Use with Testing Mode OFF to verify that alerts are suppressed during learning.
+    func resetLearningPeriod() {
+        UserDefaults.standard.set(Date(), forKey: "firstLaunchDate")
+        objectWillChange.send()
     }
+
+    /// Human-readable time remaining in the learning period.
+    /// Shows seconds when in testing mode, hours otherwise.
+    func learningPeriodRemainingLabel(now: Date = Date()) -> String {
+        let elapsed = now.timeIntervalSince(firstLaunchDate)
+        let remaining = max(0, learningPeriodDuration - elapsed)
+        if testingMode {
+            return "\(Int(remaining)) s remaining"
+        }
+        return "\(Int(remaining / 3600)) h remaining"
+    }
+
+    /// Duration of the learning period.
+    /// 30 seconds in testing mode so the full learning → active transition
+    /// can be observed without waiting.
+    var learningPeriodDuration: TimeInterval {
+        testingMode ? 30 : 3 * 86400
+    }
+
+    /// True while still within the learning period window.
+    var isInLearningPeriod: Bool {
+        Date().timeIntervalSince(firstLaunchDate) < learningPeriodDuration
+    }
+
+    /// When true, bypasses the learning period, memory pressure guard, and collapses
+    /// the 30-min trending window / 10-min anomaly-duration gate to 30 s / 10 s so
+    /// anomaly detection can be exercised without waiting.
+    @AppStorage("testingMode") var testingMode: Bool = false
 
     /// Parsed list of ignored bundle identifiers.
     var ignoredBundleIDs: [String] {
