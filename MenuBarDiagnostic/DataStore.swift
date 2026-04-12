@@ -485,6 +485,8 @@ final class DataStore {
 
     private func rebuildBaselines() {
         guard let db = db else { return }
+        // avg/median/p90 are computed in Swift (SQLite lacks native percentile functions);
+        // filtering and ordering are pushed to SQL so the in-memory math is O(1) index access.
         // Fetch all (bundle_id, date, memory_mb) rows from the last 7 days.
         let cutoff = Int64(Date().timeIntervalSince1970) - 7 * 86400
         let fetchSQL = """
