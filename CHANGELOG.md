@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.1] - 2026-04-12
+
+### Changed
+
+- **Process list display** — anomalous and normal processes now render in a single unified list, with anomalous entries always sorted to the top followed by remaining processes ordered by memory usage
+
 ## [1.0] - 2026-04-10
 
 ### Added
