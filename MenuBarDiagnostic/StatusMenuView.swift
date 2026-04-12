@@ -7,7 +7,6 @@ struct StatusMenuView: View {
     @ObservedObject var anomalyDetector: AnomalyDetector
     @ObservedObject var swapMonitor: SwapMonitor
     var onSettingsTap: () -> Void
-    var onHistoryTap: () -> Void = {}
     var onClosePopover: () -> Void = {}
     @State private var expandedPID: pid_t? = nil
     @State private var hoveredFooterButton: String? = nil
@@ -152,13 +151,14 @@ struct StatusMenuView: View {
 
     private var footerBar: some View {
         HStack {
-            Button("View History") {
-                onHistoryTap()
+            Button("About") {
+                onClosePopover()
+                NSApp.orderFrontStandardAboutPanel(nil)
             }
             .buttonStyle(.plain)
-            .foregroundColor(hoveredFooterButton == "history" ? .primary : .secondary)
+            .foregroundColor(hoveredFooterButton == "about" ? .primary : .secondary)
             .font(.caption)
-            .onHover { hoveredFooterButton = $0 ? "history" : nil }
+            .onHover { hoveredFooterButton = $0 ? "about" : nil }
             Spacer()
             if #available(macOS 14.0, *) {
                 SettingsLink {

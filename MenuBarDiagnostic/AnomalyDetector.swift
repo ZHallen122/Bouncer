@@ -28,12 +28,6 @@ final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCente
     // internal (not private) so tests can pre-seed
     var lastNotificationDates: [String: Date] = [:]
 
-    /// Maps bundleID → alert_events row ID for currently open (ongoing) anomaly episodes.
-    var alertEventIDs: [String: Int64] = [:]
-
-    /// Maps bundleID → highest memory reading seen during the current anomaly episode.
-    var alertEventPeakMBs: [String: Double] = [:]
-
     init(dataStore: DataStore, prefs: PreferencesManager) {
         self.dataStore = dataStore
         self.prefs = prefs
@@ -75,9 +69,6 @@ final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCente
 
         var liveBundleIDs = Set<String>()
         var currentlyAnomalous = Set<String>()
-        // Track current memory and name for anomalous apps so we can insert/update events.
-        var anomalousCurrentMBs: [String: Double] = [:]
-        var anomalousAppNames: [String: String] = [:]
 
         for process in processes {
             guard let bundleID = process.bundleIdentifier else { continue }
@@ -122,8 +113,6 @@ final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCente
 
             // All 3 conditions met — mark as anomalous for the view layer
             currentlyAnomalous.insert(bundleID)
-            anomalousCurrentMBs[bundleID] = currentMB
-            anomalousAppNames[bundleID] = process.name
 
             // Record when anomaly started
             if anomalyStartDates[bundleID] == nil {
@@ -150,32 +139,6 @@ final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCente
         // Clear anomaly tracking for processes that are no longer running
         for key in anomalyStartDates.keys where !liveBundleIDs.contains(key) {
             anomalyStartDates.removeValue(forKey: key)
-        }
-
-        // Persist alert events: insert new ones, update peaks, close ended ones.
-        for bundleID in currentlyAnomalous {
-            let currentMB = anomalousCurrentMBs[bundleID] ?? 0
-            if alertEventIDs[bundleID] == nil {
-                let startDate = anomalyStartDates[bundleID] ?? now
-                let appName = anomalousAppNames[bundleID] ?? bundleID
-                let rowID = dataStore.insertAlertEvent(
-                    bundleID: bundleID, appName: appName,
-                    startedAt: startDate, peakMemoryMB: currentMB
-                )
-                if rowID > 0 { alertEventIDs[bundleID] = rowID }
-                alertEventPeakMBs[bundleID] = currentMB
-            } else if currentMB > (alertEventPeakMBs[bundleID] ?? 0) {
-                alertEventPeakMBs[bundleID] = currentMB
-            }
-        }
-        let endedAnomalies = Set(alertEventIDs.keys).subtracting(currentlyAnomalous)
-        for bundleID in endedAnomalies {
-            if let rowID = alertEventIDs[bundleID] {
-                let peakMB = alertEventPeakMBs[bundleID] ?? 0
-                dataStore.closeAlertEvent(rowID: rowID, endedAt: now, peakMemoryMB: peakMB)
-            }
-            alertEventIDs.removeValue(forKey: bundleID)
-            alertEventPeakMBs.removeValue(forKey: bundleID)
         }
 
         DispatchQueue.main.async {
@@ -277,10 +240,8 @@ final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCente
 
         switch response.actionIdentifier {
         case "RESTART_NOW":
-            if !bundleID.isEmpty { dataStore.recordUserAction(bundleID: bundleID, action: "restarted") }
             restartApp(bundleID: bundleID, appName: appName)
         case "IGNORE":
-            if !bundleID.isEmpty { dataStore.recordUserAction(bundleID: bundleID, action: "ignored") }
             DispatchQueue.main.async {
                 if !bundleID.isEmpty && !self.prefs.ignoredBundleIDs.contains(bundleID) {
                     self.prefs.ignoredBundleIDs.append(bundleID)

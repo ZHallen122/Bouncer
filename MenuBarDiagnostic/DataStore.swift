@@ -1,33 +1,6 @@
 import Foundation
 import SQLite3
 
-// MARK: - History Data Models
-
-/// Aggregated record for the Top Offenders leaderboard.
-struct OffenderRecord: Identifiable {
-    let bundleID: String
-    let appName: String
-    let alertCount: Int
-    let avgDurationSeconds: Double
-    let lastAlertAt: Date
-    let restartCount: Int
-    let quitCount: Int
-    let ignoreCount: Int
-    var id: String { bundleID }
-}
-
-/// Single alert episode for the per-app timeline drill-down.
-struct AlertTimelineEntry: Identifiable {
-    let rowID: Int64
-    let startedAt: Date
-    let endedAt: Date?
-    let peakMemoryMB: Double
-    let userAction: String?
-    var id: Int64 { rowID }
-}
-
-// MARK: - DataStore
-
 /// Persistent store for per-process memory samples and daily baselines.
 ///
 /// Uses raw SQLite3 (no external dependencies). All database work runs on a
@@ -176,51 +149,6 @@ final class DataStore {
         return result
     }
 
-    // MARK: - Alert Events API
-
-    /// Inserts a new alert event row. Returns the new row's ID (> 0 on success).
-    /// Runs synchronously so AnomalyDetector can capture the rowID.
-    @discardableResult
-    func insertAlertEvent(bundleID: String, appName: String, startedAt: Date, peakMemoryMB: Double) -> Int64 {
-        var rowID: Int64 = 0
-        queue.sync {
-            rowID = doInsertAlertEvent(bundleID: bundleID, appName: appName, startedAt: startedAt, peakMemoryMB: peakMemoryMB)
-        }
-        return rowID
-    }
-
-    /// Closes an alert event by setting ended_at and updating peak_memory_mb.
-    func closeAlertEvent(rowID: Int64, endedAt: Date, peakMemoryMB: Double) {
-        queue.async { [weak self] in
-            self?.doCloseAlertEvent(rowID: rowID, endedAt: endedAt, peakMemoryMB: peakMemoryMB)
-        }
-    }
-
-    /// Records the user action on the most recent open alert event for the given bundle ID.
-    func recordUserAction(bundleID: String, action: String) {
-        queue.async { [weak self] in
-            self?.doRecordUserAction(bundleID: bundleID, action: action)
-        }
-    }
-
-    /// Returns all offenders with ≥1 alert since `since`, ranked by alert count descending.
-    func topOffenders(since: Date) -> [OffenderRecord] {
-        var result: [OffenderRecord] = []
-        queue.sync {
-            result = queryTopOffenders(since: since)
-        }
-        return result
-    }
-
-    /// Returns all alert events for `bundleID` since `since`, ordered descending by started_at.
-    func alertTimeline(bundleID: String, since: Date) -> [AlertTimelineEntry] {
-        var result: [AlertTimelineEntry] = []
-        queue.sync {
-            result = queryAlertTimeline(bundleID: bundleID, since: since)
-        }
-        return result
-    }
-
     // MARK: - Private helpers
 
     private func openDatabase() {
@@ -269,17 +197,6 @@ final class DataStore {
                 last_seen_at INTEGER
             );
             """
-        let alertEvents = """
-            CREATE TABLE IF NOT EXISTS alert_events (
-                id INTEGER PRIMARY KEY,
-                bundle_id TEXT,
-                app_name TEXT,
-                started_at INTEGER,
-                ended_at INTEGER,
-                peak_memory_mb REAL,
-                user_action TEXT
-            );
-            """
         if sqlite3_exec(db, memorySamples, nil, nil, nil) != SQLITE_OK {
             NSLog("DataStore: failed to create memory_samples table: %@", String(cString: sqlite3_errmsg(db)))
         }
@@ -289,12 +206,8 @@ final class DataStore {
         if sqlite3_exec(db, appLifecycle, nil, nil, nil) != SQLITE_OK {
             NSLog("DataStore: failed to create app_lifecycle table: %@", String(cString: sqlite3_errmsg(db)))
         }
-        if sqlite3_exec(db, alertEvents, nil, nil, nil) != SQLITE_OK {
-            NSLog("DataStore: failed to create alert_events table: %@", String(cString: sqlite3_errmsg(db)))
-        }
         migrateDailyBaselines()
         migrateAppLifecycle()
-        migrateAlertEvents()
     }
 
     /// Adds `version` and `state` columns to `daily_baselines` if they don't already exist.
@@ -748,171 +661,5 @@ final class DataStore {
         guard sqlite3_column_type(stmt, 1) != SQLITE_NULL else { return true }
         let learningStartedAt = Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 1)))
         return Date().timeIntervalSince(learningStartedAt) < duration
-    }
-
-    // MARK: - Alert Events migration
-
-    private func migrateAlertEvents() {
-        // Table is created with all columns in createTablesIfNeeded; nothing to migrate yet.
-        // Placeholder for future schema evolution.
-    }
-
-    // MARK: - Alert Events private helpers
-
-    private func doInsertAlertEvent(bundleID: String, appName: String, startedAt: Date, peakMemoryMB: Double) -> Int64 {
-        guard let db = db else { return 0 }
-        let sql = "INSERT INTO alert_events (bundle_id, app_name, started_at, peak_memory_mb) VALUES (?, ?, ?, ?);"
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            NSLog("DataStore: prepare failed in doInsertAlertEvent: %@", String(cString: sqlite3_errmsg(db)))
-            return 0
-        }
-        defer { sqlite3_finalize(stmt) }
-        let startedTS = Int64(startedAt.timeIntervalSince1970)
-        sqlite3_bind_text(stmt, 1, (bundleID as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(stmt, 2, (appName as NSString).utf8String, -1, nil)
-        sqlite3_bind_int64(stmt, 3, startedTS)
-        sqlite3_bind_double(stmt, 4, peakMemoryMB)
-        let rc = sqlite3_step(stmt)
-        guard rc == SQLITE_DONE else {
-            NSLog("DataStore: doInsertAlertEvent step failed (%d): %@", rc, String(cString: sqlite3_errmsg(db)))
-            return 0
-        }
-        return sqlite3_last_insert_rowid(db)
-    }
-
-    private func doCloseAlertEvent(rowID: Int64, endedAt: Date, peakMemoryMB: Double) {
-        guard let db = db else { return }
-        let sql = "UPDATE alert_events SET ended_at = ?, peak_memory_mb = ? WHERE id = ?;"
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            NSLog("DataStore: prepare failed in doCloseAlertEvent: %@", String(cString: sqlite3_errmsg(db)))
-            return
-        }
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_int64(stmt, 1, Int64(endedAt.timeIntervalSince1970))
-        sqlite3_bind_double(stmt, 2, peakMemoryMB)
-        sqlite3_bind_int64(stmt, 3, rowID)
-        let rc = sqlite3_step(stmt)
-        if rc != SQLITE_DONE && rc != SQLITE_ROW {
-            NSLog("DataStore: doCloseAlertEvent step failed (%d): %@", rc, String(cString: sqlite3_errmsg(db)))
-        }
-    }
-
-    private func doRecordUserAction(bundleID: String, action: String) {
-        guard let db = db else { return }
-        // Update the most recent open event for this bundle_id.
-        let sql = """
-            UPDATE alert_events SET user_action = ?
-            WHERE id = (
-                SELECT id FROM alert_events
-                WHERE bundle_id = ? AND ended_at IS NULL
-                ORDER BY started_at DESC
-                LIMIT 1
-            );
-            """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            NSLog("DataStore: prepare failed in doRecordUserAction: %@", String(cString: sqlite3_errmsg(db)))
-            return
-        }
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, (action as NSString).utf8String, -1, nil)
-        sqlite3_bind_text(stmt, 2, (bundleID as NSString).utf8String, -1, nil)
-        let rc = sqlite3_step(stmt)
-        if rc != SQLITE_DONE && rc != SQLITE_ROW {
-            NSLog("DataStore: doRecordUserAction step failed (%d): %@", rc, String(cString: sqlite3_errmsg(db)))
-        }
-    }
-
-    private func queryTopOffenders(since: Date) -> [OffenderRecord] {
-        guard let db = db else { return [] }
-        let sinceTS = Int64(since.timeIntervalSince1970)
-        // Aggregate alert counts, avg duration, last alert, and action counts per bundle_id.
-        let sql = """
-            SELECT
-                bundle_id,
-                app_name,
-                COUNT(*) AS alert_count,
-                AVG(CASE WHEN ended_at IS NOT NULL THEN ended_at - started_at ELSE NULL END) AS avg_duration,
-                MAX(started_at) AS last_alert_at,
-                SUM(CASE WHEN user_action = 'restarted' THEN 1 ELSE 0 END) AS restart_count,
-                SUM(CASE WHEN user_action = 'quit' THEN 1 ELSE 0 END) AS quit_count,
-                SUM(CASE WHEN user_action = 'ignored' THEN 1 ELSE 0 END) AS ignore_count
-            FROM alert_events
-            WHERE started_at >= ?
-            GROUP BY bundle_id
-            ORDER BY alert_count DESC, last_alert_at DESC;
-            """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            NSLog("DataStore: prepare failed in queryTopOffenders: %@", String(cString: sqlite3_errmsg(db)))
-            return []
-        }
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_int64(stmt, 1, sinceTS)
-        var rows: [OffenderRecord] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            let bundleID  = sqlite3_column_text(stmt, 0).map { String(cString: $0) } ?? ""
-            let appName   = sqlite3_column_text(stmt, 1).map { String(cString: $0) } ?? bundleID
-            let alertCount = Int(sqlite3_column_int(stmt, 2))
-            let avgDur: Double = sqlite3_column_type(stmt, 3) != SQLITE_NULL
-                ? sqlite3_column_double(stmt, 3) : 0
-            let lastAlertTS = sqlite3_column_int64(stmt, 4)
-            let lastAlertAt = Date(timeIntervalSince1970: Double(lastAlertTS))
-            let restartCount = Int(sqlite3_column_int(stmt, 5))
-            let quitCount    = Int(sqlite3_column_int(stmt, 6))
-            let ignoreCount  = Int(sqlite3_column_int(stmt, 7))
-            rows.append(OffenderRecord(
-                bundleID: bundleID,
-                appName: appName,
-                alertCount: alertCount,
-                avgDurationSeconds: avgDur,
-                lastAlertAt: lastAlertAt,
-                restartCount: restartCount,
-                quitCount: quitCount,
-                ignoreCount: ignoreCount
-            ))
-        }
-        return rows
-    }
-
-    private func queryAlertTimeline(bundleID: String, since: Date) -> [AlertTimelineEntry] {
-        guard let db = db else { return [] }
-        let sinceTS = Int64(since.timeIntervalSince1970)
-        let sql = """
-            SELECT id, started_at, ended_at, peak_memory_mb, user_action
-            FROM alert_events
-            WHERE bundle_id = ? AND started_at >= ?
-            ORDER BY started_at DESC;
-            """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            NSLog("DataStore: prepare failed in queryAlertTimeline: %@", String(cString: sqlite3_errmsg(db)))
-            return []
-        }
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, (bundleID as NSString).utf8String, -1, nil)
-        sqlite3_bind_int64(stmt, 2, sinceTS)
-        var rows: [AlertTimelineEntry] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            let rowID   = sqlite3_column_int64(stmt, 0)
-            let startTS = sqlite3_column_int64(stmt, 1)
-            let endedAt: Date? = sqlite3_column_type(stmt, 2) != SQLITE_NULL
-                ? Date(timeIntervalSince1970: Double(sqlite3_column_int64(stmt, 2)))
-                : nil
-            let peakMB  = sqlite3_column_double(stmt, 3)
-            let action: String? = sqlite3_column_type(stmt, 4) != SQLITE_NULL
-                ? sqlite3_column_text(stmt, 4).map { String(cString: $0) }
-                : nil
-            rows.append(AlertTimelineEntry(
-                rowID: rowID,
-                startedAt: Date(timeIntervalSince1970: Double(startTS)),
-                endedAt: endedAt,
-                peakMemoryMB: peakMB,
-                userAction: action
-            ))
-        }
-        return rows
     }
 }
