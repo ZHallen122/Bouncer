@@ -22,6 +22,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var hudWindow: HUDWindow?
+    private var historyWindow: NSWindow?
     private var onboardingWindow: NSWindow?
     private var cancellables = Set<AnyCancellable>()
     private(set) var pendingAnomalyAlert = false
@@ -204,6 +205,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             anomalyDetector: anomalyDetector,
             swapMonitor: swapMonitor,
             onSettingsTap: { [weak self] in self?.openSettings() },
+            onHistoryTap: { [weak self] in self?.openHistory() },
             onClosePopover: { [weak self] in self?.popover?.performClose(nil) }
         ))
         let pop = NSPopover()
@@ -219,6 +221,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
         }
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func openHistory() {
+        if let existing = historyWindow {
+            existing.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let win = HistoryWindow.makeWindow(dataStore: monitor.dataStore)
+        historyWindow = win
+        win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
