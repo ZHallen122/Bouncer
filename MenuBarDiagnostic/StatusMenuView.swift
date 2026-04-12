@@ -90,22 +90,16 @@ struct StatusMenuView: View {
 
     // MARK: - Process Sections
 
-    private var anomalousProcesses: [MenuBarProcess] {
-        monitor.processes
-            .filter { p in
-                guard let bid = p.bundleIdentifier else { return false }
-                return anomalyDetector.anomalousBundleIDs.contains(bid)
-            }
-            .sorted { $0.memoryFootprintBytes > $1.memoryFootprintBytes }
-    }
+    private var displayProcesses: [MenuBarProcess] {
+        monitor.processes.sorted { p1, p2 in
+            let a1 = anomalyDetector.anomalousBundleIDs.contains(p1.bundleIdentifier ?? "")
+            let a2 = anomalyDetector.anomalousBundleIDs.contains(p2.bundleIdentifier ?? "")
 
-    private var normalProcesses: [MenuBarProcess] {
-        monitor.processes
-            .filter { p in
-                guard let bid = p.bundleIdentifier else { return true }
-                return !anomalyDetector.anomalousBundleIDs.contains(bid)
-            }
-            .sorted { $0.memoryFootprintBytes > $1.memoryFootprintBytes }
+            if a1 && !a2 { return true }
+            if !a1 && a2 { return false }
+
+            return p1.memoryFootprintBytes > p2.memoryFootprintBytes
+        }
     }
 
     @ViewBuilder
@@ -127,25 +121,11 @@ struct StatusMenuView: View {
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    if !anomalousProcesses.isEmpty {
-                        ForEach(anomalousProcesses) { process in
-                            ProcessRowView(
-                                process: process,
-                                isAnomalous: true,
-                                isExpanded: expandedPID == process.pid,
-                                monitor: monitor,
-                                prefs: prefs,
-                                onTap: {
-                                    expandedPID = expandedPID == process.pid ? nil : process.pid
-                                }
-                            )
-                            Divider()
-                        }
-                    }
-                    ForEach(normalProcesses) { process in
+                    ForEach(displayProcesses) { process in
+                        let isAnomalous = anomalyDetector.anomalousBundleIDs.contains(process.bundleIdentifier ?? "")
                         ProcessRowView(
                             process: process,
-                            isAnomalous: false,
+                            isAnomalous: isAnomalous,
                             isExpanded: expandedPID == process.pid,
                             monitor: monitor,
                             prefs: prefs,
