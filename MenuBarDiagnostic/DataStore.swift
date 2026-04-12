@@ -315,6 +315,7 @@ final class DataStore {
         }
         migrateDailyBaselines()
         migrateAppLifecycle()
+        migrateAlertEvents()
     }
 
     /// Adds `version` and `state` columns to `daily_baselines` if they don't already exist.
@@ -338,6 +339,35 @@ final class DataStore {
             if sqlite3_exec(db, sql, nil, nil, nil) != SQLITE_OK {
                 NSLog("DataStore: failed to add 'median_mb' column to daily_baselines: %@",
                       String(cString: sqlite3_errmsg(db)))
+            }
+        }
+    }
+
+    /// Adds missing columns to `alert_events` for installs that had an older schema.
+    private func migrateAlertEvents() {
+        guard let db = db else { return }
+        var existingColumns = Set<String>()
+        let pragmaSQL = "PRAGMA table_info(alert_events);"
+        var pragmaStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, pragmaSQL, -1, &pragmaStmt, nil) == SQLITE_OK {
+            while sqlite3_step(pragmaStmt) == SQLITE_ROW {
+                if let namePtr = sqlite3_column_text(pragmaStmt, 1) {
+                    existingColumns.insert(String(cString: namePtr))
+                }
+            }
+        }
+        sqlite3_finalize(pragmaStmt)
+
+        let additions: [(column: String, sql: String)] = [
+            ("ended_at",        "ALTER TABLE alert_events ADD COLUMN ended_at INTEGER;"),
+            ("peak_memory_mb",  "ALTER TABLE alert_events ADD COLUMN peak_memory_mb REAL NOT NULL DEFAULT 0;"),
+            ("user_action",     "ALTER TABLE alert_events ADD COLUMN user_action TEXT NOT NULL DEFAULT 'none';"),
+            ("swap_correlated", "ALTER TABLE alert_events ADD COLUMN swap_correlated INTEGER NOT NULL DEFAULT 0;"),
+        ]
+        for (column, sql) in additions where !existingColumns.contains(column) {
+            if sqlite3_exec(db, sql, nil, nil, nil) != SQLITE_OK {
+                NSLog("DataStore: failed to add '%@' column to alert_events: %@",
+                      column, String(cString: sqlite3_errmsg(db)))
             }
         }
     }
