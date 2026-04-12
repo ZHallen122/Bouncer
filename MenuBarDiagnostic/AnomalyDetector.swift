@@ -80,87 +80,90 @@ final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCente
         var currentlyAnomalous = Set<String>()
 
         for process in processes {
-            guard let bundleID = process.bundleIdentifier else { continue }
-            liveBundleIDs.insert(bundleID)
+            autoreleasepool {
+                guard let bundleID = process.bundleIdentifier else { return }
+                guard bundleID != Bundle.main.bundleIdentifier else { return }
+                liveBundleIDs.insert(bundleID)
 
-            let state = bundleIDPhases[bundleID] ?? "learning_phase_1"
+                let state = bundleIDPhases[bundleID] ?? "learning_phase_1"
 
-            // Skip ignored apps.
-            guard state != "ignored", !ignoredIDs.contains(bundleID) else { continue }
+                // Skip ignored apps.
+                guard state != "ignored", !ignoredIDs.contains(bundleID) else { return }
 
-            // Select baseline metric and multiplier based on lifecycle phase.
-            let useMedian: Bool
-            let phaseMultiplier: Double
-            switch state {
-            case "learning_phase_1": useMedian = true;  phaseMultiplier = 4.0
-            case "learning_phase_2": useMedian = true;  phaseMultiplier = 3.0
-            case "learning_phase_3": useMedian = false; phaseMultiplier = 2.5
-            default:                 useMedian = false; phaseMultiplier = prefs.sensitivity.anomalyMultiplier
-            }
-
-            // 30-sample minimum: icon can tint but notification is suppressed below this.
-            let sampleCount = dataStore.sampleCount(for: bundleID)
-            let hasEnoughSamples = sampleCount >= 30
-
-            // Condition 1: current memory > phase baseline × phase multiplier
-            guard let baseline = dataStore.baseline(for: bundleID) else { continue }
-            let baselineValue = useMedian ? baseline.medianMB : baseline.p90MB
-            guard baselineValue > 0 else { continue }
-
-            let currentMB = Double(process.memoryFootprintBytes) / 1_048_576.0
-            guard currentMB > baselineValue * phaseMultiplier else {
-                anomalyStartDates.removeValue(forKey: bundleID)
-                continue
-            }
-
-            // Condition 2: memory trending upward over the last 30 minutes
-            let samples = dataStore.recentSamples(for: bundleID, since: thirtyMinutesAgo)
-            guard samples.count >= 2, linearRegressionSlope(samples) > 0 else {
-                anomalyStartDates.removeValue(forKey: bundleID)
-                continue
-            }
-
-            // All 3 conditions met — mark as anomalous for the view layer
-            currentlyAnomalous.insert(bundleID)
-
-            // Record when anomaly started
-            if anomalyStartDates[bundleID] == nil {
-                anomalyStartDates[bundleID] = now
-            }
-            guard let anomalyStart = anomalyStartDates[bundleID] else { continue }
-
-            // Must be anomalous for 10 consecutive minutes (or 10 s in testing mode).
-            let anomalyDurationGate: TimeInterval = testing ? 10 : 10 * 60
-            guard now.timeIntervalSince(anomalyStart) >= anomalyDurationGate else { continue }
-
-            // Must have at least 30 samples for a reliable baseline before notifying.
-            guard hasEnoughSamples else { continue }
-
-            // --- Alert event tracking (History view) ---
-            // Open a new event row when the anomaly is first confirmed.
-            if activeAlertEventIDs[bundleID] == nil {
-                let eventID = dataStore.insertAlertEvent(
-                    bundleID: bundleID,
-                    appName: process.name,
-                    startedAt: anomalyStart,
-                    peakMemoryMB: currentMB,
-                    swapCorrelated: swapCurrentlyActive
-                )
-                if eventID >= 0 {
-                    activeAlertEventIDs[bundleID] = eventID
+                // Select baseline metric and multiplier based on lifecycle phase.
+                let useMedian: Bool
+                let phaseMultiplier: Double
+                switch state {
+                case "learning_phase_1": useMedian = true;  phaseMultiplier = 4.0
+                case "learning_phase_2": useMedian = true;  phaseMultiplier = 3.0
+                case "learning_phase_3": useMedian = false; phaseMultiplier = 2.5
+                default:                 useMedian = false; phaseMultiplier = prefs.sensitivity.anomalyMultiplier
                 }
-            } else if let eventID = activeAlertEventIDs[bundleID] {
-                // Update the running peak memory while the anomaly persists.
-                dataStore.updateAlertEventPeak(id: eventID, peakMemoryMB: currentMB)
+
+                // 30-sample minimum: icon can tint but notification is suppressed below this.
+                let sampleCount = dataStore.sampleCount(for: bundleID)
+                let hasEnoughSamples = sampleCount >= 30
+
+                // Condition 1: current memory > phase baseline × phase multiplier
+                guard let baseline = dataStore.baseline(for: bundleID) else { return }
+                let baselineValue = useMedian ? baseline.medianMB : baseline.p90MB
+                guard baselineValue > 0 else { return }
+
+                let currentMB = Double(process.memoryFootprintBytes) / 1_048_576.0
+                guard currentMB > baselineValue * phaseMultiplier else {
+                    anomalyStartDates.removeValue(forKey: bundleID)
+                    return
+                }
+
+                // Condition 2: memory trending upward over the last 30 minutes
+                let samples = dataStore.recentSamples(for: bundleID, since: thirtyMinutesAgo)
+                guard samples.count >= 2, linearRegressionSlope(samples) > 0 else {
+                    anomalyStartDates.removeValue(forKey: bundleID)
+                    return
+                }
+
+                // All 3 conditions met — mark as anomalous for the view layer
+                currentlyAnomalous.insert(bundleID)
+
+                // Record when anomaly started
+                if anomalyStartDates[bundleID] == nil {
+                    anomalyStartDates[bundleID] = now
+                }
+                guard let anomalyStart = anomalyStartDates[bundleID] else { return }
+
+                // Must be anomalous for 10 consecutive minutes (or 10 s in testing mode).
+                let anomalyDurationGate: TimeInterval = testing ? 10 : 10 * 60
+                guard now.timeIntervalSince(anomalyStart) >= anomalyDurationGate else { return }
+
+                // Must have at least 30 samples for a reliable baseline before notifying.
+                guard hasEnoughSamples else { return }
+
+                // --- Alert event tracking (History view) ---
+                // Open a new event row when the anomaly is first confirmed.
+                if activeAlertEventIDs[bundleID] == nil {
+                    let eventID = dataStore.insertAlertEvent(
+                        bundleID: bundleID,
+                        appName: process.name,
+                        startedAt: anomalyStart,
+                        peakMemoryMB: currentMB,
+                        swapCorrelated: swapCurrentlyActive
+                    )
+                    if eventID >= 0 {
+                        activeAlertEventIDs[bundleID] = eventID
+                    }
+                } else if let eventID = activeAlertEventIDs[bundleID] {
+                    // Update the running peak memory while the anomaly persists.
+                    dataStore.updateAlertEventPeak(id: eventID, peakMemoryMB: currentMB)
+                }
+
+                // 24-hour per-app notification cooldown
+                if let lastSent = lastNotificationDates[bundleID],
+                   now.timeIntervalSince(lastSent) < 24 * 3600 { return }
+
+                let ratio = currentMB / baselineValue
+                sendNotification(bundleID: bundleID, appName: process.name, currentMB: currentMB, ratio: ratio, phase: state)
+                lastNotificationDates[bundleID] = now
             }
-
-            // 24-hour per-app notification cooldown
-            if let lastSent = lastNotificationDates[bundleID],
-               now.timeIntervalSince(lastSent) < 24 * 3600 { continue }
-
-            let ratio = currentMB / baselineValue
-            sendNotification(bundleID: bundleID, appName: process.name, currentMB: currentMB, ratio: ratio, phase: state)
-            lastNotificationDates[bundleID] = now
         }
 
         // Clear anomaly tracking for processes that are no longer running
@@ -333,7 +336,10 @@ final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCente
         }
 
         DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-            guard let url = appURL else { return }
+            guard let url = appURL else {
+                NSLog("AnomalyDetector: appURL is nil for %@ (%@); skipping relaunch", appName, bundleID)
+                return
+            }
             NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
                 if let error = error {
                     NSLog("AnomalyDetector: failed to relaunch %@ (%@): %@", appName, bundleID, error.localizedDescription)

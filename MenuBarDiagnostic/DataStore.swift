@@ -271,6 +271,21 @@ final class DataStore {
         }
     }
 
+    /// Deletes any alert_events rows recorded for this app itself (rows written before the
+    /// self-exclusion guard was added). Safe to call repeatedly — idempotent DELETE.
+    private func purgeSelfAlertEvents() {
+        guard let db = db,
+              let ownID = Bundle.main.bundleIdentifier else { return }
+        let sql = "DELETE FROM alert_events WHERE bundle_id = ?;"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, (ownID as NSString).utf8String, -1, nil)
+        if sqlite3_step(stmt) != SQLITE_DONE {
+            NSLog("DataStore: purgeSelfAlertEvents failed: %@", String(cString: sqlite3_errmsg(db)))
+        }
+    }
+
     private func createTablesIfNeeded() {
         guard let db = db else { return }
         let memorySamples = """
@@ -329,6 +344,7 @@ final class DataStore {
         migrateAppLifecycle()
         migrateAlertEvents()
         closeOrphanedAlertEvents()
+        purgeSelfAlertEvents()
     }
 
     /// Adds `version` and `state` columns to `daily_baselines` if they don't already exist.
@@ -485,6 +501,8 @@ final class DataStore {
 
     private func rebuildBaselines() {
         guard let db = db else { return }
+        // avg/median/p90 are computed in Swift (SQLite lacks native percentile functions);
+        // filtering and ordering are pushed to SQL so the in-memory math is O(1) index access.
         // Fetch all (bundle_id, date, memory_mb) rows from the last 7 days.
         let cutoff = Int64(Date().timeIntervalSince1970) - 7 * 86400
         let fetchSQL = """
@@ -615,7 +633,10 @@ final class DataStore {
         guard let db = db else { return 0 }
         let sql = "SELECT sample_count FROM app_lifecycle WHERE bundle_id = ?;"
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            NSLog("DataStore: prepare failed in querySampleCount: %@", String(cString: sqlite3_errmsg(db)))
+            return 0
+        }
         defer { sqlite3_finalize(stmt) }
         guard sqlite3_bind_text(stmt, 1, (bundleID as NSString).utf8String, -1, nil) == SQLITE_OK else { return 0 }
         guard sqlite3_step(stmt) == SQLITE_ROW else { return 0 }
@@ -628,7 +649,10 @@ final class DataStore {
         guard let db = db else { return "learning_phase_1" }
         let sql = "SELECT state FROM app_lifecycle WHERE bundle_id = ?;"
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return "learning_phase_1" }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            NSLog("DataStore: prepare failed in queryAppState: %@", String(cString: sqlite3_errmsg(db)))
+            return "learning_phase_1"
+        }
         defer { sqlite3_finalize(stmt) }
         guard sqlite3_bind_text(stmt, 1, (bundleID as NSString).utf8String, -1, nil) == SQLITE_OK else { return "learning_phase_1" }
         guard sqlite3_step(stmt) == SQLITE_ROW else { return "learning_phase_1" }
@@ -640,7 +664,10 @@ final class DataStore {
         guard let db = db else { return nil }
         let sql = "SELECT state, version, learning_started_at FROM app_lifecycle WHERE bundle_id = ?;"
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            NSLog("DataStore: prepare failed in queryLifecycleEntry: %@", String(cString: sqlite3_errmsg(db)))
+            return nil
+        }
         defer { sqlite3_finalize(stmt) }
         guard sqlite3_bind_text(stmt, 1, (bundleID as NSString).utf8String, -1, nil) == SQLITE_OK else { return nil }
         guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
@@ -778,7 +805,10 @@ final class DataStore {
         var delSamplesStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, delSamplesSQL, -1, &delSamplesStmt, nil) == SQLITE_OK {
             sqlite3_bind_text(delSamplesStmt, 1, (bundleID as NSString).utf8String, -1, nil)
-            sqlite3_step(delSamplesStmt)
+            let rc = sqlite3_step(delSamplesStmt)
+            if rc != SQLITE_DONE {
+                NSLog("DataStore: doResetToLearning delete-samples step failed (%d): %@", rc, String(cString: sqlite3_errmsg(db)))
+            }
             sqlite3_finalize(delSamplesStmt)
         }
 
@@ -786,7 +816,10 @@ final class DataStore {
         var delBaselinesStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, delBaselinesSQL, -1, &delBaselinesStmt, nil) == SQLITE_OK {
             sqlite3_bind_text(delBaselinesStmt, 1, (bundleID as NSString).utf8String, -1, nil)
-            sqlite3_step(delBaselinesStmt)
+            let rc = sqlite3_step(delBaselinesStmt)
+            if rc != SQLITE_DONE {
+                NSLog("DataStore: doResetToLearning delete-baselines step failed (%d): %@", rc, String(cString: sqlite3_errmsg(db)))
+            }
             sqlite3_finalize(delBaselinesStmt)
         }
     }
@@ -795,7 +828,10 @@ final class DataStore {
         guard let db = db else { return false }
         let sql = "SELECT state, learning_started_at FROM app_lifecycle WHERE bundle_id = ?;"
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return false }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            NSLog("DataStore: prepare failed in doIsInPerAppLearningPeriod: %@", String(cString: sqlite3_errmsg(db)))
+            return false
+        }
         defer { sqlite3_finalize(stmt) }
         guard sqlite3_bind_text(stmt, 1, (bundleID as NSString).utf8String, -1, nil) == SQLITE_OK else { return false }
         guard sqlite3_step(stmt) == SQLITE_ROW else { return true } // unknown app defaults to learning
@@ -845,7 +881,10 @@ final class DataStore {
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_double(stmt, 1, peakMemoryMB)
         sqlite3_bind_int64(stmt, 2, id)
-        sqlite3_step(stmt)
+        let rc = sqlite3_step(stmt)
+        if rc != SQLITE_DONE {
+            NSLog("DataStore: doUpdateAlertEventPeak sqlite3_step failed (%d): %@", rc, String(cString: sqlite3_errmsg(db)))
+        }
     }
 
     private func doCloseAlertEvent(id: Int64, endedAt: Date, userAction: String) {
@@ -880,7 +919,7 @@ final class DataStore {
                 SUM(CASE WHEN user_action = 'quit'      THEN 1 ELSE 0 END) AS quit_count,
                 SUM(CASE WHEN user_action = 'ignored'   THEN 1 ELSE 0 END) AS ignored_count
             FROM alert_events
-            WHERE started_at >= ?
+            WHERE started_at >= ? AND bundle_id != COALESCE(?, '')
             GROUP BY bundle_id
             ORDER BY alert_count DESC, last_alert_at DESC;
             """
@@ -891,6 +930,8 @@ final class DataStore {
         }
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_int64(stmt, 1, cutoff)
+        let ownID = Bundle.main.bundleIdentifier ?? ""
+        sqlite3_bind_text(stmt, 2, (ownID as NSString).utf8String, -1, nil)
 
         var rows: [AlertLeaderboardEntry] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
