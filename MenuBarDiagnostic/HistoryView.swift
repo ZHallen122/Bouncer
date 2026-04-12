@@ -204,6 +204,7 @@ private struct LeaderboardRowView: View {
     let onTap: () -> Void
 
     @State private var isHovered = false
+    @State private var appIconImage: NSImage? = nil
 
     var body: some View {
         Button(action: onTap) {
@@ -215,8 +216,18 @@ private struct LeaderboardRowView: View {
                     .frame(width: 28, alignment: .trailing)
 
                 // App icon
-                appIcon
-                    .frame(width: 24, height: 24)
+                Group {
+                    if let img = appIconImage {
+                        Image(nsImage: img)
+                            .resizable()
+                            .interpolation(.high)
+                    } else {
+                        Image(systemName: "app.fill")
+                            .font(.title3)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .frame(width: 24, height: 24)
 
                 // Name + subtitle
                 VStack(alignment: .leading, spacing: 2) {
@@ -255,19 +266,13 @@ private struct LeaderboardRowView: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-    }
-
-    @ViewBuilder
-    private var appIcon: some View {
-        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: entry.bundleID) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: url.path))
-                .resizable()
-                .interpolation(.high)
-                .frame(width: 24, height: 24)
-        } else {
-            Image(systemName: "app.fill")
-                .font(.title3)
-                .foregroundColor(.secondary)
+        .task(id: entry.bundleID) {
+            let bundleID = entry.bundleID
+            let img = await Task.detached(priority: .userInitiated) {
+                guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return nil as NSImage? }
+                return NSWorkspace.shared.icon(forFile: url.path)
+            }.value
+            appIconImage = img
         }
     }
 

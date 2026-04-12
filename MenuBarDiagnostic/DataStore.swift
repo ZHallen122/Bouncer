@@ -259,6 +259,18 @@ final class DataStore {
         }
     }
 
+    /// Closes any alert_events rows that were left open by a previous session (e.g. crash).
+    /// Called once after the DB is fully set up. Orphaned rows would appear as "Still active"
+    /// forever and inflate average-duration calculations.
+    private func closeOrphanedAlertEvents() {
+        guard let db = db else { return }
+        // Mark ended_at = started_at so duration = 0 rather than "infinity".
+        let sql = "UPDATE alert_events SET ended_at = started_at, user_action = 'none' WHERE ended_at IS NULL;"
+        if sqlite3_exec(db, sql, nil, nil, nil) != SQLITE_OK {
+            NSLog("DataStore: closeOrphanedAlertEvents failed: %@", String(cString: sqlite3_errmsg(db)))
+        }
+    }
+
     private func createTablesIfNeeded() {
         guard let db = db else { return }
         let memorySamples = """
@@ -316,6 +328,7 @@ final class DataStore {
         migrateDailyBaselines()
         migrateAppLifecycle()
         migrateAlertEvents()
+        closeOrphanedAlertEvents()
     }
 
     /// Adds `version` and `state` columns to `daily_baselines` if they don't already exist.
@@ -859,7 +872,7 @@ final class DataStore {
         let sql = """
             SELECT
                 bundle_id,
-                app_name,
+                MAX(app_name) AS app_name,
                 COUNT(*) AS alert_count,
                 AVG(CASE WHEN ended_at IS NOT NULL THEN CAST(ended_at - started_at AS REAL) ELSE NULL END) AS avg_duration_sec,
                 MAX(started_at) AS last_alert_at,
