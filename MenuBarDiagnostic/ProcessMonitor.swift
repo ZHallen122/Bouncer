@@ -145,38 +145,37 @@ class ProcessMonitor: ObservableObject {
         }
     }
 
+    private func getActivePIDsFast() -> [pid_t] {
+        let type = UInt32(PROC_ALL_PIDS)
+        let bufferSize = proc_listpids(type, 0, nil, 0)
+        let paddedSize = bufferSize + Int32(MemoryLayout<pid_t>.stride * 50)
+        guard paddedSize > 0 else { return [] }
+        
+        var pids = [pid_t](repeating: 0, count: Int(paddedSize) / MemoryLayout<pid_t>.stride)
+        let bytesRead = proc_listpids(type, 0, &pids, paddedSize)
+        guard bytesRead > 0 else { return [] }
+        
+        let actualCount = Int(bytesRead) / MemoryLayout<pid_t>.stride
+        return Array(pids.prefix(actualCount))
+    }
+
     private func sampleOnQueue() {
         let thermalState = ProcessInfo.processInfo.thermalState
         let wallNow = DispatchTime.now().uptimeNanoseconds
 
-        // Include all user-visible processes (regular and accessory; excludes
-        // background-only daemons with `.prohibited` policy).
-        let accessoryApps = NSWorkspace.shared.runningApplications.filter {
-            $0.activationPolicy != .prohibited
-        }
-
-        // Build bundleID → bundleURL map for version lookups during persist.
+        let currentPIDs = getActivePIDsFast()
+        let activePIDsSet = Set(currentPIDs)
         var bundleURLMap: [String: URL] = [:]
-        for app in accessoryApps {
-            if let bid = app.bundleIdentifier, let url = app.bundleURL {
-                bundleURLMap[bid] = url
-            }
-        }
-
         var newProcesses: [MenuBarProcess] = []
 
-        for app in accessoryApps {
-            let pid = app.processIdentifier
+        for pid in currentPIDs {
             guard pid > 0 else { continue }
 
-            // Look up or populate static property cache for this PID.
-            // icon (app.icon) is the most expensive property — it triggers an XPC call
-            // on first access. Caching it here ensures it is fetched only once per
-            // process lifetime. sampleQueue is serial so no additional locking is needed.
             let staticProps: AppStaticProperties
             if let cached = appStaticCache[pid] {
                 staticProps = cached
             } else {
+                guard let app = NSRunningApplication(processIdentifier: pid) else { continue }
                 let props = AppStaticProperties(
                     name: app.localizedName ?? "Unknown",
                     bundleIdentifier: app.bundleIdentifier,
@@ -187,6 +186,13 @@ class ProcessMonitor: ObservableObject {
                 )
                 appStaticCache[pid] = props
                 staticProps = props
+            }
+
+            // Exclude background-only daemons with `.prohibited` policy
+            guard staticProps.activationPolicy != .prohibited else { continue }
+
+            if let bid = staticProps.bundleIdentifier, let url = staticProps.bundleURL {
+                bundleURLMap[bid] = url
             }
 
             var info = proc_taskinfo()
@@ -270,7 +276,11 @@ class ProcessMonitor: ObservableObject {
         previousSamples = previousSamples.filter { livePIDs.contains($0.key) }
         cpuHistories = cpuHistories.filter { livePIDs.contains($0.key) }
         memoryHistories = memoryHistories.filter { livePIDs.contains($0.key) }
-        appStaticCache = appStaticCache.filter { livePIDs.contains($0.key) }
+        
+        let deadPIDs = Set(appStaticCache.keys).subtracting(activePIDsSet)
+        for deadPid in deadPIDs {
+            appStaticCache.removeValue(forKey: deadPid)
+        }
 
         let sorted = newProcesses.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 

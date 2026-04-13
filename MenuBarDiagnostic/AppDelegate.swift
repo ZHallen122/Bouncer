@@ -27,6 +27,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var cancellables = Set<AnyCancellable>()
     private(set) var pendingAnomalyAlert = false
     private var testIconColor: String = "normal"
+    private var currentIconColor: NSColor?
     private lazy var baseIcon: NSImage = {
         if let img = NSImage(systemSymbolName: "stethoscope", accessibilityDescription: "Bouncer") { return img }
         NSLog("Bouncer: stethoscope system symbol unavailable; falling back to app icon")
@@ -277,6 +278,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             color = iconColor(swapState: swapMonitor.swapState, pendingAnomalyAlert: pendingAnomalyAlert)
         }
+
+        guard color != currentIconColor else { return }
+        currentIconColor = color
 
         if color == .systemGreen {
             baseIcon.isTemplate = true
