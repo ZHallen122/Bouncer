@@ -39,6 +39,7 @@ The icon color reflects current system state at a glance:
 - **Swap memory detection** — `SwapMonitor` polls `vm.swapusage` every 30 seconds. When swap transitions from inactive to active, Bouncer sends a notification with **Quit Top App** / **View All** / **Dismiss** actions (1-hour cooldown). The icon turns orange while swap is in use, and red when swap is growing rapidly (> ~10 MB/min).
 - **Settings** — Configure sensitivity (Low / Medium / High), launch at login, and a dedicated Block List tab for managing ignored bundle IDs via a list UI with `+` / `-` controls.
 - **First-launch onboarding** — On first run a welcome sheet explains what Bouncer does and requests notification permission. Shown once, gated by `hasShownOnboarding`.
+- **History window** — A "History" button in the popover opens a standalone window with a top-offenders leaderboard (ranked by alert count) and a per-app alert timeline. Results can be filtered to the last 7 or 30 days; tapping any leaderboard row drills into that app's timeline.
 - **Automatic updates** — Sparkle 2.9.1 checks for updates in the background. A "Check for Updates" button is available in Settings, and automatic checks can be toggled on/off.
 
 ---
@@ -49,7 +50,7 @@ The icon color reflects current system state at a glance:
 MenuBarDiagnosticApp (@main, SwiftUI App)
 └── AppDelegate (via @NSApplicationDelegateAdaptor)
     ├── NSStatusItem (stethoscope icon, green/orange/red tint)
-    └── NSPopover → HUDView (SwiftUI)
+    └── NSPopover → StatusMenuView (SwiftUI)
 
 ProcessMonitor  ──samples every 2s──►  AnomalyDetector
      │                                       │

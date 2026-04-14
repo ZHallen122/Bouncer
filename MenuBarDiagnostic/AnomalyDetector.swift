@@ -11,6 +11,13 @@ import UserNotifications
 ///
 /// A notification is sent only when the app has been anomalous for 10+ consecutive
 /// minutes AND no notification has been sent for that app in the past 24 hours.
+///
+/// Anomaly thresholds are gated by a four-phase lifecycle:
+///   `learning_phase_1` → `learning_phase_2` → `learning_phase_3` → `active`
+/// Earlier phases use looser median-based thresholds to reduce false positives on
+/// newly-seen apps (whose p90 baseline is not yet statistically reliable). Only the
+/// `active` phase applies the p90 baseline with the full user-configured sensitivity
+/// multiplier.
 final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
 
     private let dataStore: DataStore
