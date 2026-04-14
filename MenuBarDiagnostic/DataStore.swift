@@ -45,6 +45,10 @@ final class DataStore {
     private let queue = DispatchQueue(label: "com.mbdiag.datastore")
     private var db: OpaquePointer?
 
+    // Pre-compiled SQLite prepared statements for the hottest read paths (baseline
+    // lookup, sample count, app state, lifecycle entry, and recent samples). Compiling
+    // a statement once with sqlite3_prepare_v2 and rebinding parameters on each use
+    // avoids re-parsing SQL on every 2-second sampling tick.
     private var cachedBaselineStmt: OpaquePointer?
     private var cachedSampleCountStmt: OpaquePointer?
     private var cachedAppStateStmt: OpaquePointer?
