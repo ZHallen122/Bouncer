@@ -59,8 +59,8 @@ class ProcessMonitor: ObservableObject {
 
     private let prefs: PreferencesManager
     private var timer: Timer?
-    let dataStore = DataStore()
-    private var lastPersistTime: Date = .distantPast
+    let dataStore: DataStore
+    internal var lastPersistTime: Date = .distantPast
 
     /// Set externally by AppDelegate to enable anomaly detection and notifications.
     var anomalyDetector: AnomalyDetector?
@@ -114,7 +114,7 @@ class ProcessMonitor: ObservableObject {
 
     // MARK: - Per-app lifecycle cache (accessed only on sampleQueue)
 
-    private struct LifecycleEntry {
+    internal struct LifecycleEntry {
         var state: String
         var version: String?
         var learningStartedAt: Date?
@@ -123,14 +123,15 @@ class ProcessMonitor: ObservableObject {
 
     /// In-memory cache of per-app lifecycle state. Keyed by bundle ID.
     /// Populated lazily from DataStore on first encounter; updated on each persist tick.
-    private var lifecycleCache: [String: LifecycleEntry] = [:]
+    internal var lifecycleCache: [String: LifecycleEntry] = [:]
 
     /// Phase map updated on each persist tick and passed to AnomalyDetector.
     /// Accessed only on sampleQueue.
     private var currentBundleIDPhases: [String: String] = [:]
 
-    init(prefs: PreferencesManager = PreferencesManager()) {
+    init(prefs: PreferencesManager = PreferencesManager(), dataStore: DataStore = DataStore()) {
         self.prefs = prefs
+        self.dataStore = dataStore
     }
 
     deinit { stopMonitoring() }
@@ -357,7 +358,7 @@ class ProcessMonitor: ObservableObject {
     ///
     /// Runs on a throttled interval (30 s normally, 5 s in testing mode). Extracted
     /// from `sampleOnQueue()` for readability; must only be called from `sampleQueue`.
-    private func persistAndAdvanceLifecycle(processes: [MenuBarProcess], bundleURLMap: [String: URL]) {
+    internal func persistAndAdvanceLifecycle(processes: [MenuBarProcess], bundleURLMap: [String: URL]) {
         let persistInterval: TimeInterval = prefs.testingMode ? 5 : 30
         guard Date().timeIntervalSince(lastPersistTime) >= persistInterval else { return }
 
@@ -420,8 +421,9 @@ class ProcessMonitor: ObservableObject {
                                                                    version: entry.version,
                                                                    learningStartedAt: nil,
                                                                    lastSeen: now)
-                    } else if entry.state == "stale" {
-                        // Known but dormant: restart learning.
+                    } else if entry.state == "stale" || entry.state == "learning" {
+                        // Known but dormant, or stub row from insertSamples with the legacy
+                        // default 'learning' state: restart learning clock.
                         dataStore.resetToLearning(bundleID: bundleID, version: version)
                         lifecycleCache[bundleID] = LifecycleEntry(state: "learning_phase_1",
                                                                    version: version ?? entry.version,

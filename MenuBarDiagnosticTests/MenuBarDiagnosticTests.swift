@@ -1169,6 +1169,45 @@ final class MenuBarDiagnosticTests: XCTestCase {
                        "3.9 GB delta is below the 4 GB spike threshold → valid sample → swapCritical")
     }
 
+    func testWindowCapEvictsOldestSample() {
+        // Inject 11 samples: first at 0 MB, then 10 more at [128, 256, ..., 1280 MB].
+        // maxSamples = 10, so after cap the 0 MB sample is evicted.
+        // Window = [128..1280 MB], min = 128 MB, newest = 1280 MB.
+        // delta = 1280 - 128 = 1152 MB = 1207959552 bytes > 1 GiB → swapCritical.
+        // If 0 MB were NOT evicted: min = 0, newest = 1152 MB, delta = 1152 MB → also swapCritical;
+        // swapUsedBytes would be 1152 MB instead of 1280 MB — proving different eviction state.
+        let monitor = SwapMonitor()
+        let now = Date()
+        monitor.injectSample(swapBytes: 0, compressedBytes: 0, at: now.addingTimeInterval(-330))
+        for i in 1...10 {
+            let swapBytes = UInt64(i) * 128 * MB
+            monitor.injectSample(swapBytes: swapBytes, compressedBytes: 0,
+                                 at: now.addingTimeInterval(Double(i - 10) * 30))
+        }
+        // After cap: exactly 10 samples [128..1280 MB]; 0 MB sample was evicted.
+        XCTAssertEqual(monitor.swapState, .swapCritical,
+                       "window cap evicts 0 MB sample → min = 128 MB, delta = 1152 MB → swapCritical")
+        XCTAssertEqual(monitor.swapUsedBytes, 1280 * MB,
+                       "swapUsedBytes must equal the newest injected sample (1280 MB) after cap eviction")
+    }
+
+    func testWindowExactlyAtCapacityNoOverflow() {
+        // Inject exactly 10 samples (= maxSamples). No eviction should occur; no crash.
+        // Samples: 0 MB, 128 MB, ..., 1152 MB (10 samples).
+        // min = 0, newest = 1152 MB, delta = 1152 MB > 1 GiB → swapCritical.
+        let monitor = SwapMonitor()
+        let now = Date()
+        for i in 0..<10 {
+            let swapBytes = UInt64(i) * 128 * MB
+            monitor.injectSample(swapBytes: swapBytes, compressedBytes: 0,
+                                 at: now.addingTimeInterval(Double(i - 9) * 30))
+        }
+        XCTAssertEqual(monitor.swapState, .swapCritical,
+                       "exactly 10 samples with 1152 MB delta must produce swapCritical — no crash at capacity")
+        XCTAssertEqual(monitor.swapUsedBytes, 9 * 128 * MB,
+                       "swapUsedBytes must be the newest (9th × 128 MB = 1152 MB) after 10 samples at capacity")
+    }
+
     // MARK: - OnboardingView: hasShownOnboarding UserDefaults gate
 
     func testHasShownOnboardingGate() {
@@ -2053,6 +2092,151 @@ final class MenuBarDiagnosticTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         XCTAssertFalse(detector.anomalousBundleIDs.contains(bundleID),
                        "process with 'ignored' phase in bundleIDPhases must be skipped regardless of memory level")
+    }
+
+    // MARK: - ProcessMonitor: persistAndAdvanceLifecycle
+
+    func testPersistAndAdvanceLifecycleThrottleGuard() {
+        // First call (lastPersistTime = distantPast) writes an app lifecycle entry.
+        // Second call (lastPersistTime = now) is throttled and must NOT write a new entry.
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let monitor = ProcessMonitor(prefs: PreferencesManager(), dataStore: store)
+        monitor.lastPersistTime = .distantPast
+
+        let firstBundleID = "com.test.PAL.Throttle.First"
+        let firstProcess = makeProcess(bundleID: firstBundleID, memoryMB: 100, pid: 50001)
+
+        // First call must proceed (distantPast satisfies the 30 s threshold).
+        monitor.persistAndAdvanceLifecycle(processes: [firstProcess], bundleURLMap: [:])
+        Thread.sleep(forTimeInterval: 0.2)
+
+        XCTAssertEqual(store.appState(for: firstBundleID), "learning_phase_1",
+                       "first call must write a lifecycle entry for the new app")
+
+        // Set lastPersistTime to now — second call with a new bundle ID must be throttled.
+        monitor.lastPersistTime = Date()
+        let secondBundleID = "com.test.PAL.Throttle.Second"
+        let secondProcess = makeProcess(bundleID: secondBundleID, memoryMB: 100, pid: 50002)
+
+        monitor.persistAndAdvanceLifecycle(processes: [secondProcess], bundleURLMap: [:])
+        Thread.sleep(forTimeInterval: 0.1)
+
+        // The second bundle ID must have NO lifecycle entry — the call was throttled.
+        XCTAssertNil(store.lifecycleEntry(for: secondBundleID),
+                     "throttled second call must not create a lifecycle entry for the new process")
+    }
+
+    func testPersistAndAdvanceLifecycleNewApp() {
+        // A brand-new bundle ID must be inserted into app_lifecycle as learning_phase_1.
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let monitor = ProcessMonitor(prefs: PreferencesManager(), dataStore: store)
+        monitor.lastPersistTime = .distantPast
+
+        let bundleID = "com.test.PAL.NewApp"
+        let process = makeProcess(bundleID: bundleID, memoryMB: 50, pid: 50002)
+
+        monitor.persistAndAdvanceLifecycle(processes: [process], bundleURLMap: [:])
+        Thread.sleep(forTimeInterval: 0.2)
+
+        XCTAssertEqual(store.appState(for: bundleID), "learning_phase_1",
+                       "brand-new app must enter learning_phase_1 on first encounter")
+    }
+
+    func testPersistAndAdvanceLifecycleStaleAppResets() {
+        // An app with state == "stale" in DB must restart in learning_phase_1 when it reappears.
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let bundleID = "com.test.PAL.StaleReset"
+        store.updateAppLifecycle(bundleID: bundleID, state: "stale", version: nil, lastSeen: Date())
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let monitor = ProcessMonitor(prefs: PreferencesManager(), dataStore: store)
+        monitor.lastPersistTime = .distantPast
+
+        let process = makeProcess(bundleID: bundleID, memoryMB: 50, pid: 50003)
+        monitor.persistAndAdvanceLifecycle(processes: [process], bundleURLMap: [:])
+        Thread.sleep(forTimeInterval: 0.2)
+
+        XCTAssertEqual(store.appState(for: bundleID), "learning_phase_1",
+                       "stale app re-appearing must restart in learning_phase_1")
+    }
+
+    func testPersistAndAdvanceLifecyclePhaseAdvancement() {
+        // Pre-seed lifecycleCache with learningStartedAt 5 hours ago → phase must advance to learning_phase_2.
+        // Phase thresholds: <4h → phase_1, <24h → phase_2, <72h → phase_3, else → active.
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let bundleID = "com.test.PAL.PhaseAdvance"
+        let fiveHoursAgo = Date().addingTimeInterval(-5 * 3600)
+
+        let monitor = ProcessMonitor(prefs: PreferencesManager(), dataStore: store)
+        monitor.lastPersistTime = .distantPast
+
+        // Inject cache entry directly: state = phase_1, learningStartedAt = 5 hours ago.
+        // persistAndAdvanceLifecycle will see the cache hit and then advance the phase.
+        monitor.lifecycleCache[bundleID] = ProcessMonitor.LifecycleEntry(
+            state: "learning_phase_1",
+            version: nil,
+            learningStartedAt: fiveHoursAgo,
+            lastSeen: Date()
+        )
+
+        let process = makeProcess(bundleID: bundleID, memoryMB: 50, pid: 50004)
+        monitor.persistAndAdvanceLifecycle(processes: [process], bundleURLMap: [:])
+        Thread.sleep(forTimeInterval: 0.2)
+
+        XCTAssertEqual(store.appState(for: bundleID), "learning_phase_2",
+                       "app with learningStartedAt 5 hours ago must advance to learning_phase_2 (threshold: 4 h)")
+    }
+
+    // MARK: - DataStore: transaction safety
+
+    func testRebuildBaselinesAtomicityAllGroupsCommitted() {
+        // Insert 5 samples each for 3 bundle IDs, recomputeBaselines, verify ALL three get baselines.
+        // This proves BEGIN;…COMMIT; in rebuildBaselines commits all groups in one transaction.
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let ids = ["com.test.Tx.A", "com.test.Tx.B", "com.test.Tx.C"]
+        for (offset, bid) in ids.enumerated() {
+            let procs = (0..<5).map { i in
+                makeProcess(bundleID: bid, memoryMB: Double(100 + i * 10), pid: Int32(60000 + offset * 10 + i))
+            }
+            store.persistSamples(procs)
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+
+        store.recomputeBaselines()
+        Thread.sleep(forTimeInterval: 0.2)
+
+        for bid in ids {
+            XCTAssertNotNil(store.baseline(for: bid),
+                            "baseline must be non-nil for \(bid) — rebuildBaselines must commit all groups atomically")
+        }
+    }
+
+    func testInsertSamplesBulkConsistency() {
+        // 20 processes sharing one bundle ID in a single persistSamples call must all be committed.
+        // This exercises the per-row loop inside BEGIN IMMEDIATE;…COMMIT; in insertSamples.
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let bundleID = "com.test.Tx.Bulk"
+        let procs = (0..<20).map { i in
+            makeProcess(bundleID: bundleID, memoryMB: Double(50 + i), pid: Int32(70000 + i))
+        }
+        store.persistSamples(procs)
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let samples = store.recentSamples(for: bundleID, since: Date().addingTimeInterval(-3600))
+        XCTAssertEqual(samples.count, 20,
+                       "all 20 rows for a single bulk persistSamples call must be committed atomically")
     }
 
     // MARK: - AppIcon asset wiring
