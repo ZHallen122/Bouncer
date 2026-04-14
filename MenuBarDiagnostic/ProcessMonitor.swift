@@ -189,6 +189,7 @@ class ProcessMonitor: ObservableObject {
 
         for pid in currentPIDs {
             guard pid > 0 else { continue }
+            guard pid != ProcessInfo.processInfo.processIdentifier else { continue }
 
             let staticProps: AppStaticProperties
             if let result = appStaticCache[pid] {
