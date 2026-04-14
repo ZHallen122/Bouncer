@@ -83,7 +83,6 @@ final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCente
         for process in processes {
             autoreleasepool {
                 guard let bundleID = process.bundleIdentifier else { return }
-                guard bundleID != Bundle.main.bundleIdentifier else { return }
                 liveBundleIDs.insert(bundleID)
 
                 let state = bundleIDPhases[bundleID] ?? "learning_phase_1"
