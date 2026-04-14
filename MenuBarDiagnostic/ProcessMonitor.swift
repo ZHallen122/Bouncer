@@ -20,7 +20,13 @@ class ProcessMonitor: ObservableObject {
 
     /// Whether the UI is currently visible (Popover or HUD is open).
     /// Updated by AppDelegate to prevent unnecessary `@Published` state mutations.
-    var isUIVisible: Bool = false
+    var isUIVisible: Bool = false {
+        didSet {
+            if isUIVisible && !oldValue {
+                self.processes = self.currentProcesses
+            }
+        }
+    }
 
     /// System-wide CPU utilisation as a fraction in `[0, 1]`, computed from
     /// `host_statistics(HOST_CPU_LOAD_INFO)` tick deltas (user + sys + nice).
@@ -463,13 +469,30 @@ class ProcessMonitor: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.currentProcesses = sorted
+            
+            // Limit SwiftUI objectWillChange firings by doing equality checks
             if self.isUIVisible {
                 self.processes = sorted
+                if self.systemCPUFraction != cpuFrac { self.systemCPUFraction = cpuFrac }
+                if self.systemRAMUsedBytes != ramUsed { self.systemRAMUsedBytes = ramUsed }
+                if self.systemRAMTotalBytes != ramTotal { self.systemRAMTotalBytes = ramTotal }
+                if self.memoryPressure != pressure { self.memoryPressure = pressure }
+            } else {
+                // When UI is hidden, throttle memory updates to only when menu bar % changes
+                if self.memoryPressure != pressure { self.memoryPressure = pressure }
+                
+                if ramTotal > 0 && self.systemRAMTotalBytes > 0 {
+                    let oldPerc = Int((Double(self.systemRAMUsedBytes) / Double(self.systemRAMTotalBytes) * 100).rounded())
+                    let newPerc = Int((Double(ramUsed) / Double(ramTotal) * 100).rounded())
+                    if oldPerc != newPerc {
+                        self.systemRAMUsedBytes = ramUsed
+                        self.systemRAMTotalBytes = ramTotal
+                    }
+                } else {
+                    if self.systemRAMUsedBytes != ramUsed { self.systemRAMUsedBytes = ramUsed }
+                    if self.systemRAMTotalBytes != ramTotal { self.systemRAMTotalBytes = ramTotal }
+                }
             }
-            self.systemCPUFraction = cpuFrac
-            self.systemRAMUsedBytes = ramUsed
-            self.systemRAMTotalBytes = ramTotal
-            self.memoryPressure = pressure
         }
     }
 

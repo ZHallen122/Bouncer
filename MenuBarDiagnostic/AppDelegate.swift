@@ -327,9 +327,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if prefs.showMemoryPressureInMenuBar {
             let used = monitor.systemRAMUsedBytes
             let total = monitor.systemRAMTotalBytes
-            button.title = total > 0 ? "\(Int((Double(used) / Double(total) * 100).rounded()))%" : ""
+            let newTitle = total > 0 ? "\(Int((Double(used) / Double(total) * 100).rounded()))%" : ""
+            if button.title != newTitle {
+                button.title = newTitle
+            }
         } else {
-            button.title = ""
+            if button.title != "" {
+                button.title = ""
+            }
         }
     }
 
