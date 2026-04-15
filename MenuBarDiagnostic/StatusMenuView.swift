@@ -103,7 +103,7 @@ struct StatusMenuView: View {
         let appCount = viewModel.displayProcesses.count
         let anomalyCount = anomalyDetector.anomalousBundleIDs.count
         return VStack(alignment: .leading, spacing: 2) {
-            Text("\(appCount) app\(appCount == 1 ? "" : "s") running")
+            Text("Top \(appCount) app\(appCount == 1 ? "" : "s") by memory")
                 .font(.headline)
             if prefs.isInLearningPeriod {
                 Text("Learning your apps…")
