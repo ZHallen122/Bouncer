@@ -11,6 +11,13 @@ import UserNotifications
 ///
 /// A notification is sent only when the app has been anomalous for 10+ consecutive
 /// minutes AND no notification has been sent for that app in the past 24 hours.
+///
+/// Anomaly thresholds are gated by a four-phase lifecycle:
+///   `learning_phase_1` → `learning_phase_2` → `learning_phase_3` → `active`
+/// Earlier phases use looser median-based thresholds to reduce false positives on
+/// newly-seen apps (whose p90 baseline is not yet statistically reliable). Only the
+/// `active` phase applies the p90 baseline with the full user-configured sensitivity
+/// multiplier.
 final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
 
     private let dataStore: DataStore
@@ -187,33 +194,6 @@ final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCente
         }
     }
 
-    // MARK: - Linear Regression
-
-    /// Computes the linear regression slope over the sample set.
-    /// x = elapsed seconds from the first sample, y = memoryMB.
-    /// A positive slope indicates memory is trending upward.
-    func linearRegressionSlope(_ samples: [(memoryMB: Double, timestamp: Date)]) -> Double {
-        guard let first = samples.first else { return 0 }
-        let n = Double(samples.count)
-
-        var sumX: Double = 0
-        var sumY: Double = 0
-        var sumXY: Double = 0
-        var sumX2: Double = 0
-
-        for s in samples {
-            let x = s.timestamp.timeIntervalSince(first.timestamp)
-            let y = s.memoryMB
-            sumX  += x
-            sumY  += y
-            sumXY += x * y
-            sumX2 += x * x
-        }
-
-        let denominator = n * sumX2 - sumX * sumX
-        guard denominator != 0 else { return 0 }
-        return (n * sumXY - sumX * sumY) / denominator
-    }
 
     // MARK: - Notifications
 
@@ -250,10 +230,10 @@ final class AnomalyDetector: NSObject, ObservableObject, UNUserNotificationCente
 
         if phase == "learning_phase_1" || phase == "learning_phase_2" {
             content.title = "Bouncer is still learning \(appName)"
-            content.body = "\(appName)'s memory looks unusually high right now (\(memStr)). Worth a look."
+            content.body = "\(appName)'s memory looks unusually high (\(memStr)). Restarting it may help if your Mac feels slow."
         } else {
-            content.title = "\(appName) memory is abnormal"
-            content.body = String(format: "Currently using %@ — %.1fx its normal level. Recommended: restart \(appName).", memStr, ratio)
+            content.title = "\(appName) is using too much memory"
+            content.body = String(format: "Using %@ — %.1fx its normal level. Restart \(appName) to free up memory.", memStr, ratio)
         }
 
         content.sound = .default

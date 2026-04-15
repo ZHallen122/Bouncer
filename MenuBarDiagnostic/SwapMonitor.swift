@@ -82,10 +82,10 @@ class SwapMonitor: ObservableObject {
     func buildNotificationContent(processes: [MenuBarProcess], state: SwapState) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
         if state == .swapCritical {
-            content.title = "Critical: Mac is actively swapping to disk"
+            content.title = "Mac is swapping heavily — performance is affected"
             content.body = buildNotificationBody(processes: processes, urgent: true)
         } else {
-            content.title = "Your Mac is using disk as memory"
+            content.title = "Mac is using disk as overflow memory"
             content.body = buildNotificationBody(processes: processes, urgent: false)
         }
         content.categoryIdentifier = "SWAP_ACTIVE"
@@ -195,21 +195,18 @@ class SwapMonitor: ObservableObject {
         }
     }
 
-    private func swapDelta() -> UInt64 {
-        guard swapSamples.count >= 2 else { return 0 }
-        // Use min-in-window rather than oldest to correctly capture growth even when
-        // swap partially releases mid-window before spiking again.
-        let minInWindow = swapSamples.min(by: { $0.bytes < $1.bytes })!.bytes
-        let newest = swapSamples.last!.bytes
+    /// Returns the net growth within a rolling window: newest minus the minimum observed value.
+    /// Uses min-in-window rather than oldest to correctly capture growth even when
+    /// the metric partially releases mid-window before spiking again.
+    private func windowDelta(samples: [(timestamp: Date, bytes: UInt64)]) -> UInt64 {
+        guard samples.count >= 2 else { return 0 }
+        let minInWindow = samples.min(by: { $0.bytes < $1.bytes })!.bytes
+        let newest = samples.last!.bytes
         return newest > minInWindow ? newest - minInWindow : 0
     }
 
-    private func compressedDelta() -> UInt64 {
-        guard compressedSamples.count >= 2 else { return 0 }
-        let minInWindow = compressedSamples.min(by: { $0.bytes < $1.bytes })!.bytes
-        let newest = compressedSamples.last!.bytes
-        return newest > minInWindow ? newest - minInWindow : 0
-    }
+    private func swapDelta() -> UInt64 { windowDelta(samples: swapSamples) }
+    private func compressedDelta() -> UInt64 { windowDelta(samples: compressedSamples) }
 
     private func refreshSwapState() {
         let sd = swapDelta()

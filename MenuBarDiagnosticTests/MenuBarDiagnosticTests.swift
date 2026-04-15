@@ -33,36 +33,33 @@ final class MenuBarDiagnosticTests: XCTestCase {
     // MARK: - linearRegressionSlope
 
     func testSlopePositiveForIncreasingMemory() {
-        let detector = AnomalyDetector(dataStore: DataStore(path: ":memory:"), prefs: PreferencesManager())
         let now = Date()
         let samples: [(memoryMB: Double, timestamp: Date)] = [
             (100, now),
             (150, now.addingTimeInterval(600)),
             (200, now.addingTimeInterval(1200))
         ]
-        XCTAssertGreaterThan(detector.linearRegressionSlope(samples), 0)
+        XCTAssertGreaterThan(linearRegressionSlope(samples), 0)
     }
 
     func testSlopeNegativeForDecreasingMemory() {
-        let detector = AnomalyDetector(dataStore: DataStore(path: ":memory:"), prefs: PreferencesManager())
         let now = Date()
         let samples: [(memoryMB: Double, timestamp: Date)] = [
             (200, now),
             (150, now.addingTimeInterval(600)),
             (100, now.addingTimeInterval(1200))
         ]
-        XCTAssertLessThan(detector.linearRegressionSlope(samples), 0)
+        XCTAssertLessThan(linearRegressionSlope(samples), 0)
     }
 
     func testSlopeZeroForFlatMemory() {
-        let detector = AnomalyDetector(dataStore: DataStore(path: ":memory:"), prefs: PreferencesManager())
         let now = Date()
         let samples: [(memoryMB: Double, timestamp: Date)] = [
             (100, now),
             (100, now.addingTimeInterval(600)),
             (100, now.addingTimeInterval(1200))
         ]
-        XCTAssertEqual(detector.linearRegressionSlope(samples), 0, accuracy: 0.0001)
+        XCTAssertEqual(linearRegressionSlope(samples), 0, accuracy: 0.0001)
     }
 
     // MARK: - DataStore: sample storage
@@ -573,8 +570,8 @@ final class MenuBarDiagnosticTests: XCTestCase {
         swapMon.swapUsedBytes = UInt64(2.1 * 1_073_741_824)
         let processes = [makeProcess(bundleID: "com.tinyspeck.slackmacgap", memoryMB: 1126.4)]
         let content = swapMon.buildNotificationContent(processes: processes)
-        XCTAssertTrue(content.title.contains("Your Mac is using disk as memory"),
-                      "notification title must contain 'Your Mac is using disk as memory'")
+        XCTAssertTrue(content.title.contains("Mac is using disk as overflow memory"),
+                      "notification title must contain 'Mac is using disk as overflow memory'")
         XCTAssertTrue(content.body.contains("Biggest contributor"),
                       "notification body must name the biggest memory contributor")
     }
@@ -797,7 +794,7 @@ final class MenuBarDiagnosticTests: XCTestCase {
         let significantContent = monitor.buildNotificationContent(processes: [], state: .swapSignificant)
         XCTAssertNotEqual(criticalContent.title, significantContent.title,
                           "swapCritical and swapSignificant notifications must have different titles")
-        XCTAssertTrue(criticalContent.title.lowercased().contains("critical"),
+        XCTAssertTrue(criticalContent.title.lowercased().contains("swapping"),
                       "swapCritical notification title must convey urgency")
     }
 
@@ -867,8 +864,7 @@ final class MenuBarDiagnosticTests: XCTestCase {
     // MARK: - linearRegressionSlope: single sample returns 0.0 (denominator guard)
 
     func testLinearRegressionSlopeSingleSample() {
-        let detector = AnomalyDetector(dataStore: DataStore(path: ":memory:"), prefs: PreferencesManager())
-        let result = detector.linearRegressionSlope([(memoryMB: 100, timestamp: Date())])
+        let result = linearRegressionSlope([(memoryMB: 100, timestamp: Date())])
         XCTAssertEqual(result, 0.0, "linearRegressionSlope must return 0.0 for a single-sample array (denominator guard path)")
     }
 
@@ -1173,6 +1169,45 @@ final class MenuBarDiagnosticTests: XCTestCase {
                        "3.9 GB delta is below the 4 GB spike threshold → valid sample → swapCritical")
     }
 
+    func testWindowCapEvictsOldestSample() {
+        // Inject 11 samples: first at 0 MB, then 10 more at [128, 256, ..., 1280 MB].
+        // maxSamples = 10, so after cap the 0 MB sample is evicted.
+        // Window = [128..1280 MB], min = 128 MB, newest = 1280 MB.
+        // delta = 1280 - 128 = 1152 MB = 1207959552 bytes > 1 GiB → swapCritical.
+        // If 0 MB were NOT evicted: min = 0, newest = 1152 MB, delta = 1152 MB → also swapCritical;
+        // swapUsedBytes would be 1152 MB instead of 1280 MB — proving different eviction state.
+        let monitor = SwapMonitor()
+        let now = Date()
+        monitor.injectSample(swapBytes: 0, compressedBytes: 0, at: now.addingTimeInterval(-330))
+        for i in 1...10 {
+            let swapBytes = UInt64(i) * 128 * MB
+            monitor.injectSample(swapBytes: swapBytes, compressedBytes: 0,
+                                 at: now.addingTimeInterval(Double(i - 10) * 30))
+        }
+        // After cap: exactly 10 samples [128..1280 MB]; 0 MB sample was evicted.
+        XCTAssertEqual(monitor.swapState, .swapCritical,
+                       "window cap evicts 0 MB sample → min = 128 MB, delta = 1152 MB → swapCritical")
+        XCTAssertEqual(monitor.swapUsedBytes, 1280 * MB,
+                       "swapUsedBytes must equal the newest injected sample (1280 MB) after cap eviction")
+    }
+
+    func testWindowExactlyAtCapacityNoOverflow() {
+        // Inject exactly 10 samples (= maxSamples). No eviction should occur; no crash.
+        // Samples: 0 MB, 128 MB, ..., 1152 MB (10 samples).
+        // min = 0, newest = 1152 MB, delta = 1152 MB > 1 GiB → swapCritical.
+        let monitor = SwapMonitor()
+        let now = Date()
+        for i in 0..<10 {
+            let swapBytes = UInt64(i) * 128 * MB
+            monitor.injectSample(swapBytes: swapBytes, compressedBytes: 0,
+                                 at: now.addingTimeInterval(Double(i - 9) * 30))
+        }
+        XCTAssertEqual(monitor.swapState, .swapCritical,
+                       "exactly 10 samples with 1152 MB delta must produce swapCritical — no crash at capacity")
+        XCTAssertEqual(monitor.swapUsedBytes, 9 * 128 * MB,
+                       "swapUsedBytes must be the newest (9th × 128 MB = 1152 MB) after 10 samples at capacity")
+    }
+
     // MARK: - OnboardingView: hasShownOnboarding UserDefaults gate
 
     func testHasShownOnboardingGate() {
@@ -1423,8 +1458,8 @@ final class MenuBarDiagnosticTests: XCTestCase {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         XCTAssertNotNil(detector.lastSentNotificationTitle,
                         "notification must have been sent for active phase above threshold with ≥30 samples")
-        XCTAssertTrue(detector.lastSentNotificationTitle?.contains("abnormal") == true,
-                      "active-phase notification title must contain 'abnormal'")
+        XCTAssertTrue(detector.lastSentNotificationTitle?.contains("too much memory") == true,
+                      "active-phase notification title must contain 'too much memory'")
     }
 
     func testStaleMarkingCoversLearningPhases() {
@@ -1787,6 +1822,421 @@ final class MenuBarDiagnosticTests: XCTestCase {
         let timeline = store.alertTimeline(bundleID: bundleID, days: 7)
         XCTAssertEqual(timeline.first?.userAction, "quit",
                        "user_action in DB must be 'quit' after recordUserAction(\"quit\")")
+    }
+
+    // MARK: - AnomalyDetector: GB memory formatting in notification body
+
+    func testNotificationBodyFormatsGBWhenOver1000MB() {
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let bundleID = "com.test.GBFormat"
+
+        seedSamples(store: store, bundleID: bundleID, memoryMB: 100, count: 35, pidBase: 9300)
+        store.recomputeBaselines()
+        Thread.sleep(forTimeInterval: 0.1)
+
+        // Two trend samples 1 second apart → positive slope
+        store.persistSamples([makeProcess(bundleID: bundleID, memoryMB: 100, pid: 9400)])
+        Thread.sleep(forTimeInterval: 1.1)
+        store.persistSamples([makeProcess(bundleID: bundleID, memoryMB: 200, pid: 9401)])
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let detector = AnomalyDetector(dataStore: store, prefs: PreferencesManager())
+        detector.anomalyStartDates[bundleID] = Date().addingTimeInterval(-11 * 60)
+
+        // 1200 MB >> p90(100) × 2.5 = 250 MB threshold; 37 samples ≥ 30
+        detector.evaluate(
+            processes: [makeProcess(bundleID: bundleID, memoryMB: 1200)],
+            pressure: .warning,
+            bundleIDPhases: [bundleID: "active"]
+        )
+
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertNotNil(detector.lastSentNotificationBody,
+                        "notification body must be set for 1200 MB above active threshold")
+        XCTAssertTrue(detector.lastSentNotificationBody?.contains("GB") == true,
+                      "notification body must use GB formatting when memory >= 1000 MB")
+        XCTAssertFalse(detector.lastSentNotificationBody?.contains("MB") == true,
+                       "notification body must NOT contain 'MB' when memory is formatted as GB")
+    }
+
+    // MARK: - AnomalyDetector: recordUserAction with invalid action is a no-op
+
+    func testRecordUserActionWithInvalidActionIsNoOp() {
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let bundleID = "com.test.InvalidAction"
+
+        let eventID = store.insertAlertEvent(
+            bundleID: bundleID, appName: "InvalidActionApp",
+            startedAt: Date().addingTimeInterval(-5 * 60),
+            peakMemoryMB: 300, swapCorrelated: false
+        )
+        XCTAssertGreaterThanOrEqual(eventID, 1)
+
+        let detector = AnomalyDetector(dataStore: store, prefs: PreferencesManager())
+        detector.activeAlertEventIDs[bundleID] = eventID
+
+        detector.recordUserAction("invalidAction", for: bundleID)
+
+        // Invalid action must not touch activeAlertEventIDs
+        XCTAssertNotNil(detector.activeAlertEventIDs[bundleID],
+                        "activeAlertEventIDs must not be cleared for an invalid action")
+
+        Thread.sleep(forTimeInterval: 0.15)
+
+        let timeline = store.alertTimeline(bundleID: bundleID, days: 7)
+        XCTAssertNil(timeline.first?.endedAt,
+                     "event must remain open (endedAt nil) after recordUserAction with invalid action")
+    }
+
+    // MARK: - AnomalyDetector: swapCurrentlyActive propagates to swapCorrelated in DB
+
+    func testSwapCurrentlyActivePropagatesSwapCorrelated() {
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let bundleID = "com.test.SwapCorrelated"
+
+        seedSamples(store: store, bundleID: bundleID, memoryMB: 100, count: 35, pidBase: 9500)
+        store.recomputeBaselines()
+        Thread.sleep(forTimeInterval: 0.1)
+
+        // Two trend samples 1 second apart → positive slope
+        store.persistSamples([makeProcess(bundleID: bundleID, memoryMB: 100, pid: 9600)])
+        Thread.sleep(forTimeInterval: 1.1)
+        store.persistSamples([makeProcess(bundleID: bundleID, memoryMB: 200, pid: 9601)])
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let detector = AnomalyDetector(dataStore: store, prefs: PreferencesManager())
+        detector.anomalyStartDates[bundleID] = Date().addingTimeInterval(-11 * 60)
+        detector.swapCurrentlyActive = true
+
+        // 300 MB > p90(100) × 2.5 = 250 MB threshold (active phase, 37 samples ≥ 30)
+        detector.evaluate(
+            processes: [makeProcess(bundleID: bundleID, memoryMB: 300)],
+            pressure: .warning,
+            bundleIDPhases: [bundleID: "active"]
+        )
+
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        Thread.sleep(forTimeInterval: 0.3)
+
+        let timeline = store.alertTimeline(bundleID: bundleID, days: 7)
+        XCTAssertFalse(timeline.isEmpty, "alert timeline must contain an event after confirmed anomaly")
+        XCTAssertTrue(timeline.first?.swapCorrelated == true,
+                      "swapCorrelated must be true when swapCurrentlyActive was set before evaluate()")
+    }
+
+    // MARK: - DataStore: alertTimeline returns empty for unknown bundleID
+
+    func testAlertTimelineEmptyForUnknownBundleID() {
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let timeline = store.alertTimeline(bundleID: "com.test.NeverInserted", days: 7)
+        XCTAssertTrue(timeline.isEmpty,
+                      "alertTimeline must return empty for a bundle ID with no alert events")
+    }
+
+    // MARK: - DataStore: alertTimeline excludes events older than `days`
+
+    func testAlertTimelineDayFilter() {
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let bundleID = "com.test.TimelineFilter"
+        let now = Date()
+
+        // Event 10 days ago — outside the 7-day window
+        let oldID = store.insertAlertEvent(
+            bundleID: bundleID, appName: "FilterApp",
+            startedAt: now.addingTimeInterval(-10 * 86400),
+            peakMemoryMB: 200, swapCorrelated: false
+        )
+        // Event 3 days ago — inside the 7-day window
+        let recentID = store.insertAlertEvent(
+            bundleID: bundleID, appName: "FilterApp",
+            startedAt: now.addingTimeInterval(-3 * 86400),
+            peakMemoryMB: 300, swapCorrelated: false
+        )
+        XCTAssertGreaterThanOrEqual(oldID, 1)
+        XCTAssertGreaterThanOrEqual(recentID, 1)
+
+        store.closeAlertEvent(id: oldID, endedAt: now.addingTimeInterval(-10 * 86400 + 3600), userAction: "none")
+        store.closeAlertEvent(id: recentID, endedAt: now.addingTimeInterval(-3 * 86400 + 3600), userAction: "none")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let timeline = store.alertTimeline(bundleID: bundleID, days: 7)
+        XCTAssertEqual(timeline.count, 1,
+                       "alertTimeline(days: 7) must exclude events older than 7 days")
+        XCTAssertEqual(timeline.first?.peakMemoryMB ?? 0, 300, accuracy: 0.01,
+                       "the remaining event must be the 3-day-old one, not the 10-day-old one")
+    }
+
+    // MARK: - DataStore: alertLeaderboard excludes events older than `days`
+
+    func testAlertLeaderboardDayFilter() {
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let bundleID = "com.test.LeaderboardFilter"
+        let now = Date()
+
+        // Event 10 days ago — outside 7-day window
+        let oldID = store.insertAlertEvent(
+            bundleID: bundleID, appName: "LBFilterApp",
+            startedAt: now.addingTimeInterval(-10 * 86400),
+            peakMemoryMB: 200, swapCorrelated: false
+        )
+        // Event 2 days ago — inside 7-day window
+        let recentID = store.insertAlertEvent(
+            bundleID: bundleID, appName: "LBFilterApp",
+            startedAt: now.addingTimeInterval(-2 * 86400),
+            peakMemoryMB: 300, swapCorrelated: false
+        )
+        XCTAssertGreaterThanOrEqual(oldID, 1)
+        XCTAssertGreaterThanOrEqual(recentID, 1)
+
+        store.closeAlertEvent(id: oldID, endedAt: now.addingTimeInterval(-10 * 86400 + 3600), userAction: "none")
+        store.closeAlertEvent(id: recentID, endedAt: now.addingTimeInterval(-2 * 86400 + 3600), userAction: "none")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let leaderboard = store.alertLeaderboard(days: 7)
+        let entry = leaderboard.first { $0.bundleID == bundleID }
+        XCTAssertNotNil(entry, "leaderboard must contain an entry for the test bundle ID")
+        XCTAssertEqual(entry?.alertCount, 1,
+                       "alertLeaderboard(days: 7) must count only the event within the last 7 days")
+    }
+
+    // MARK: - DataStore: isInPerAppLearningPeriod
+
+    func testIsInPerAppLearningPeriodTrueAndFalse() {
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        store.resetToLearning(bundleID: "com.test.Learning", version: nil)
+        Thread.sleep(forTimeInterval: 0.1)
+
+        // Just started learning — elapsed ≈ 0 s < 4 h → true
+        XCTAssertTrue(store.isInPerAppLearningPeriod(bundleID: "com.test.Learning", duration: 4 * 3600),
+                      "isInPerAppLearningPeriod must be true when learning just started and duration is 4 hours")
+
+        // Unknown bundleID has no DB entry; implementation defaults to true (unknown = in learning)
+        XCTAssertTrue(store.isInPerAppLearningPeriod(bundleID: "com.test.Unknown", duration: 4 * 3600),
+                      "isInPerAppLearningPeriod must be true for an unknown bundle ID (unknown defaults to learning)")
+
+        // duration = 0 → elapsed > 0, so elapsed < 0 is false → returns false
+        XCTAssertFalse(store.isInPerAppLearningPeriod(bundleID: "com.test.Learning", duration: 0),
+                       "isInPerAppLearningPeriod must be false when duration window is 0 (already elapsed)")
+    }
+
+    // MARK: - DataStore: sampleCount increments with successive persists
+
+    func testSampleCountIncrementsWithSuccessivePersists() {
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let bundleID = "com.test.SampleCount"
+
+        // First persist tick: each call to persistSamples increments sample_count by 1
+        // per unique bundle ID seen in that tick (see insertSamples seenBundleIDs logic).
+        store.persistSamples([makeProcess(bundleID: bundleID, memoryMB: 100, pid: 11001)])
+        Thread.sleep(forTimeInterval: 0.1)
+        XCTAssertEqual(store.sampleCount(for: bundleID), 1,
+                       "sampleCount must be 1 after the first persistSamples call")
+
+        // Second persist tick with a different pid → sample_count increments to 2
+        store.persistSamples([makeProcess(bundleID: bundleID, memoryMB: 100, pid: 11002)])
+        Thread.sleep(forTimeInterval: 0.1)
+        XCTAssertEqual(store.sampleCount(for: bundleID), 2,
+                       "sampleCount must be 2 after the second persistSamples call")
+    }
+
+    // MARK: - AnomalyDetector: "ignored" phase in bundleIDPhases skips process
+
+    func testIgnoredPhaseInBundleIDPhasesSkipsProcess() {
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let bundleID = "com.test.IgnoredPhase"
+
+        // Baseline p90 = 50 MB → any phase threshold well below 999 MB
+        let baseProcs = (1...10).map { i in
+            makeProcess(bundleID: bundleID, memoryMB: 50, pid: Int32(9700 + i))
+        }
+        store.persistSamples(baseProcs)
+        Thread.sleep(forTimeInterval: 0.1)
+        store.recomputeBaselines()
+        Thread.sleep(forTimeInterval: 0.1)
+
+        // Two trend samples 1 second apart → positive slope
+        store.persistSamples([makeProcess(bundleID: bundleID, memoryMB: 100, pid: 9800)])
+        Thread.sleep(forTimeInterval: 1.1)
+        store.persistSamples([makeProcess(bundleID: bundleID, memoryMB: 200, pid: 9801)])
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let detector = AnomalyDetector(dataStore: store, prefs: PreferencesManager())
+        detector.anomalyStartDates[bundleID] = Date().addingTimeInterval(-11 * 60)
+
+        // 999 MB is way above any threshold, but bundleIDPhases marks the state as "ignored"
+        // This tests the `state != "ignored"` guard in evaluate(), distinct from prefs.ignoredBundleIDs.
+        detector.evaluate(
+            processes: [makeProcess(bundleID: bundleID, memoryMB: 999)],
+            pressure: .warning,
+            bundleIDPhases: [bundleID: "ignored"]
+        )
+
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertFalse(detector.anomalousBundleIDs.contains(bundleID),
+                       "process with 'ignored' phase in bundleIDPhases must be skipped regardless of memory level")
+    }
+
+    // MARK: - ProcessMonitor: persistAndAdvanceLifecycle
+
+    func testPersistAndAdvanceLifecycleThrottleGuard() {
+        // First call (lastPersistTime = distantPast) writes an app lifecycle entry.
+        // Second call (lastPersistTime = now) is throttled and must NOT write a new entry.
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let monitor = ProcessMonitor(prefs: PreferencesManager(), dataStore: store)
+        monitor.lastPersistTime = .distantPast
+
+        let firstBundleID = "com.test.PAL.Throttle.First"
+        let firstProcess = makeProcess(bundleID: firstBundleID, memoryMB: 100, pid: 50001)
+
+        // First call must proceed (distantPast satisfies the 30 s threshold).
+        monitor.persistAndAdvanceLifecycle(processes: [firstProcess], bundleURLMap: [:])
+        Thread.sleep(forTimeInterval: 0.2)
+
+        XCTAssertEqual(store.appState(for: firstBundleID), "learning_phase_1",
+                       "first call must write a lifecycle entry for the new app")
+
+        // Set lastPersistTime to now — second call with a new bundle ID must be throttled.
+        monitor.lastPersistTime = Date()
+        let secondBundleID = "com.test.PAL.Throttle.Second"
+        let secondProcess = makeProcess(bundleID: secondBundleID, memoryMB: 100, pid: 50002)
+
+        monitor.persistAndAdvanceLifecycle(processes: [secondProcess], bundleURLMap: [:])
+        Thread.sleep(forTimeInterval: 0.1)
+
+        // The second bundle ID must have NO lifecycle entry — the call was throttled.
+        XCTAssertNil(store.lifecycleEntry(for: secondBundleID),
+                     "throttled second call must not create a lifecycle entry for the new process")
+    }
+
+    func testPersistAndAdvanceLifecycleNewApp() {
+        // A brand-new bundle ID must be inserted into app_lifecycle as learning_phase_1.
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let monitor = ProcessMonitor(prefs: PreferencesManager(), dataStore: store)
+        monitor.lastPersistTime = .distantPast
+
+        let bundleID = "com.test.PAL.NewApp"
+        let process = makeProcess(bundleID: bundleID, memoryMB: 50, pid: 50002)
+
+        monitor.persistAndAdvanceLifecycle(processes: [process], bundleURLMap: [:])
+        Thread.sleep(forTimeInterval: 0.2)
+
+        XCTAssertEqual(store.appState(for: bundleID), "learning_phase_1",
+                       "brand-new app must enter learning_phase_1 on first encounter")
+    }
+
+    func testPersistAndAdvanceLifecycleStaleAppResets() {
+        // An app with state == "stale" in DB must restart in learning_phase_1 when it reappears.
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let bundleID = "com.test.PAL.StaleReset"
+        store.updateAppLifecycle(bundleID: bundleID, state: "stale", version: nil, lastSeen: Date())
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let monitor = ProcessMonitor(prefs: PreferencesManager(), dataStore: store)
+        monitor.lastPersistTime = .distantPast
+
+        let process = makeProcess(bundleID: bundleID, memoryMB: 50, pid: 50003)
+        monitor.persistAndAdvanceLifecycle(processes: [process], bundleURLMap: [:])
+        Thread.sleep(forTimeInterval: 0.2)
+
+        XCTAssertEqual(store.appState(for: bundleID), "learning_phase_1",
+                       "stale app re-appearing must restart in learning_phase_1")
+    }
+
+    func testPersistAndAdvanceLifecyclePhaseAdvancement() {
+        // Pre-seed lifecycleCache with learningStartedAt 5 hours ago → phase must advance to learning_phase_2.
+        // Phase thresholds: <4h → phase_1, <24h → phase_2, <72h → phase_3, else → active.
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let bundleID = "com.test.PAL.PhaseAdvance"
+        let fiveHoursAgo = Date().addingTimeInterval(-5 * 3600)
+
+        let monitor = ProcessMonitor(prefs: PreferencesManager(), dataStore: store)
+        monitor.lastPersistTime = .distantPast
+
+        // Inject cache entry directly: state = phase_1, learningStartedAt = 5 hours ago.
+        // persistAndAdvanceLifecycle will see the cache hit and then advance the phase.
+        monitor.lifecycleCache[bundleID] = ProcessMonitor.LifecycleEntry(
+            state: "learning_phase_1",
+            version: nil,
+            learningStartedAt: fiveHoursAgo,
+            lastSeen: Date()
+        )
+
+        let process = makeProcess(bundleID: bundleID, memoryMB: 50, pid: 50004)
+        monitor.persistAndAdvanceLifecycle(processes: [process], bundleURLMap: [:])
+        Thread.sleep(forTimeInterval: 0.2)
+
+        XCTAssertEqual(store.appState(for: bundleID), "learning_phase_2",
+                       "app with learningStartedAt 5 hours ago must advance to learning_phase_2 (threshold: 4 h)")
+    }
+
+    // MARK: - DataStore: transaction safety
+
+    func testRebuildBaselinesAtomicityAllGroupsCommitted() {
+        // Insert 5 samples each for 3 bundle IDs, recomputeBaselines, verify ALL three get baselines.
+        // This proves BEGIN;…COMMIT; in rebuildBaselines commits all groups in one transaction.
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let ids = ["com.test.Tx.A", "com.test.Tx.B", "com.test.Tx.C"]
+        for (offset, bid) in ids.enumerated() {
+            let procs = (0..<5).map { i in
+                makeProcess(bundleID: bid, memoryMB: Double(100 + i * 10), pid: Int32(60000 + offset * 10 + i))
+            }
+            store.persistSamples(procs)
+        }
+        Thread.sleep(forTimeInterval: 0.1)
+
+        store.recomputeBaselines()
+        Thread.sleep(forTimeInterval: 0.2)
+
+        for bid in ids {
+            XCTAssertNotNil(store.baseline(for: bid),
+                            "baseline must be non-nil for \(bid) — rebuildBaselines must commit all groups atomically")
+        }
+    }
+
+    func testInsertSamplesBulkConsistency() {
+        // 20 processes sharing one bundle ID in a single persistSamples call must all be committed.
+        // This exercises the per-row loop inside BEGIN IMMEDIATE;…COMMIT; in insertSamples.
+        let store = DataStore(path: ":memory:")
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let bundleID = "com.test.Tx.Bulk"
+        let procs = (0..<20).map { i in
+            makeProcess(bundleID: bundleID, memoryMB: Double(50 + i), pid: Int32(70000 + i))
+        }
+        store.persistSamples(procs)
+        Thread.sleep(forTimeInterval: 0.1)
+
+        let samples = store.recentSamples(for: bundleID, since: Date().addingTimeInterval(-3600))
+        XCTAssertEqual(samples.count, 20,
+                       "all 20 rows for a single bulk persistSamples call must be committed atomically")
     }
 
     // MARK: - AppIcon asset wiring

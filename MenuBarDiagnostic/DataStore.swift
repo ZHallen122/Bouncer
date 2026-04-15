@@ -45,6 +45,10 @@ final class DataStore {
     private let queue = DispatchQueue(label: "com.mbdiag.datastore")
     private var db: OpaquePointer?
 
+    // Pre-compiled SQLite prepared statements for the hottest read paths (baseline
+    // lookup, sample count, app state, lifecycle entry, and recent samples). Compiling
+    // a statement once with sqlite3_prepare_v2 and rebinding parameters on each use
+    // avoids re-parsing SQL on every 2-second sampling tick.
     private var cachedBaselineStmt: OpaquePointer?
     private var cachedSampleCountStmt: OpaquePointer?
     private var cachedAppStateStmt: OpaquePointer?
@@ -324,7 +328,7 @@ final class DataStore {
         let appLifecycle = """
             CREATE TABLE IF NOT EXISTS app_lifecycle (
                 bundle_id TEXT PRIMARY KEY,
-                state TEXT NOT NULL DEFAULT 'learning',
+                state TEXT NOT NULL DEFAULT 'learning_phase_1',
                 version TEXT,
                 learning_started_at INTEGER,
                 last_seen_at INTEGER
@@ -437,6 +441,16 @@ final class DataStore {
                       String(cString: sqlite3_errmsg(db)))
             }
         }
+
+        // Migrate legacy 'learning' default state to the current 'learning_phase_1'.
+        // Rows inserted before the numbered-phase system was introduced carry the old
+        // default. Treat them identically to phase_1 so they flow through the normal
+        // phase advancement logic rather than hitting the stale/legacy branch.
+        let migrateLearning = "UPDATE app_lifecycle SET state = 'learning_phase_1' WHERE state = 'learning';"
+        if sqlite3_exec(db, migrateLearning, nil, nil, nil) != SQLITE_OK {
+            NSLog("DataStore: failed to migrate legacy 'learning' state: %@",
+                  String(String(cString: sqlite3_errmsg(db))))
+        }
     }
 
     private func insertSamples(_ processes: [MenuBarProcess]) {
@@ -462,7 +476,10 @@ final class DataStore {
         }
         defer { sqlite3_finalize(countStmt) }
 
-        sqlite3_exec(db, "BEGIN IMMEDIATE;", nil, nil, nil)
+        if sqlite3_exec(db, "BEGIN IMMEDIATE;", nil, nil, nil) != SQLITE_OK {
+            NSLog("DataStore: BEGIN IMMEDIATE failed in insertSamples: %@", String(cString: sqlite3_errmsg(db)))
+            return
+        }
 
         var seenBundleIDs = Set<String>()
         for process in processes {
@@ -495,7 +512,10 @@ final class DataStore {
             sqlite3_reset(countStmt)
         }
 
-        sqlite3_exec(db, "COMMIT;", nil, nil, nil)
+        if sqlite3_exec(db, "COMMIT;", nil, nil, nil) != SQLITE_OK {
+            NSLog("DataStore: COMMIT failed in insertSamples: %@", String(cString: sqlite3_errmsg(db)))
+            sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+        }
     }
 
     private func deleteStaleSamples() {
@@ -581,6 +601,10 @@ final class DataStore {
         }
         defer { sqlite3_finalize(uStmt) }
 
+        if sqlite3_exec(db, "BEGIN IMMEDIATE;", nil, nil, nil) != SQLITE_OK {
+            NSLog("DataStore: BEGIN IMMEDIATE failed in rebuildBaselines: %@", String(cString: sqlite3_errmsg(db)))
+            return
+        }
         for group in groups {
             let sorted = group.values.sorted()
             let avg = sorted.reduce(0, +) / Double(sorted.count)
@@ -605,13 +629,20 @@ final class DataStore {
             }
             sqlite3_reset(uStmt)
         }
+        if sqlite3_exec(db, "COMMIT;", nil, nil, nil) != SQLITE_OK {
+            NSLog("DataStore: COMMIT failed in rebuildBaselines: %@", String(cString: sqlite3_errmsg(db)))
+            sqlite3_exec(db, "ROLLBACK;", nil, nil, nil)
+        }
     }
 
     private func getRecentSamplesStmt() -> OpaquePointer? {
         if let stmt = cachedRecentSamplesStmt { return stmt }
         guard let db = db else { return nil }
         let sql = "SELECT memory_mb, sampled_at FROM memory_samples WHERE bundle_id = ? AND sampled_at >= ? ORDER BY sampled_at ASC;"
-        if sqlite3_prepare_v2(db, sql, -1, &cachedRecentSamplesStmt, nil) != SQLITE_OK { return nil }
+        if sqlite3_prepare_v2(db, sql, -1, &cachedRecentSamplesStmt, nil) != SQLITE_OK {
+            NSLog("DataStore: sqlite3_prepare_v2 failed for getRecentSamplesStmt: %@", String(cString: sqlite3_errmsg(db)))
+            return nil
+        }
         return cachedRecentSamplesStmt
     }
 
@@ -636,7 +667,10 @@ final class DataStore {
         if let stmt = cachedBaselineStmt { return stmt }
         guard let db = db else { return nil }
         let sql = "SELECT avg_mb, median_mb, p90_mb FROM daily_baselines WHERE bundle_id = ? ORDER BY date DESC LIMIT 1;"
-        if sqlite3_prepare_v2(db, sql, -1, &cachedBaselineStmt, nil) != SQLITE_OK { return nil }
+        if sqlite3_prepare_v2(db, sql, -1, &cachedBaselineStmt, nil) != SQLITE_OK {
+            NSLog("DataStore: sqlite3_prepare_v2 failed for getBaselineStmt: %@", String(cString: sqlite3_errmsg(db)))
+            return nil
+        }
         return cachedBaselineStmt
     }
 
@@ -654,7 +688,10 @@ final class DataStore {
         if let stmt = cachedSampleCountStmt { return stmt }
         guard let db = db else { return nil }
         let sql = "SELECT sample_count FROM app_lifecycle WHERE bundle_id = ?;"
-        if sqlite3_prepare_v2(db, sql, -1, &cachedSampleCountStmt, nil) != SQLITE_OK { return nil }
+        if sqlite3_prepare_v2(db, sql, -1, &cachedSampleCountStmt, nil) != SQLITE_OK {
+            NSLog("DataStore: sqlite3_prepare_v2 failed for getSampleCountStmt: %@", String(cString: sqlite3_errmsg(db)))
+            return nil
+        }
         return cachedSampleCountStmt
     }
 
@@ -672,7 +709,10 @@ final class DataStore {
         if let stmt = cachedAppStateStmt { return stmt }
         guard let db = db else { return nil }
         let sql = "SELECT state FROM app_lifecycle WHERE bundle_id = ?;"
-        if sqlite3_prepare_v2(db, sql, -1, &cachedAppStateStmt, nil) != SQLITE_OK { return nil }
+        if sqlite3_prepare_v2(db, sql, -1, &cachedAppStateStmt, nil) != SQLITE_OK {
+            NSLog("DataStore: sqlite3_prepare_v2 failed for getAppStateStmt: %@", String(cString: sqlite3_errmsg(db)))
+            return nil
+        }
         return cachedAppStateStmt
     }
 
@@ -689,7 +729,10 @@ final class DataStore {
         if let stmt = cachedLifecycleEntryStmt { return stmt }
         guard let db = db else { return nil }
         let sql = "SELECT state, version, learning_started_at FROM app_lifecycle WHERE bundle_id = ?;"
-        if sqlite3_prepare_v2(db, sql, -1, &cachedLifecycleEntryStmt, nil) != SQLITE_OK { return nil }
+        if sqlite3_prepare_v2(db, sql, -1, &cachedLifecycleEntryStmt, nil) != SQLITE_OK {
+            NSLog("DataStore: sqlite3_prepare_v2 failed for getLifecycleEntryStmt: %@", String(cString: sqlite3_errmsg(db)))
+            return nil
+        }
         return cachedLifecycleEntryStmt
     }
 
@@ -710,12 +753,12 @@ final class DataStore {
 
     /// Upserts last_seen_at and state. Does NOT touch learning_started_at on updates
     /// (preserving whatever the existing row has). For new row inserts, sets
-    /// learning_started_at to now when state == "learning".
+    /// learning_started_at to now when state has the "learning_" prefix.
     private func doUpdateAppLifecycle(bundleID: String, state: String, version: String?, lastSeen: Date) {
         guard let db = db else { return }
         let lastSeenTS = Int64(lastSeen.timeIntervalSince1970)
         let nowTS = Int64(Date().timeIntervalSince1970)
-        // For fresh INSERT: supply learning_started_at=now when state=='learning'.
+        // For fresh INSERT: supply learning_started_at=now when state has the "learning_" prefix.
         // ON CONFLICT UPDATE: skip learning_started_at so the existing value is preserved.
         let sql = """
             INSERT INTO app_lifecycle (bundle_id, state, version, learning_started_at, last_seen_at)
@@ -904,7 +947,10 @@ final class DataStore {
         guard let db = db else { return }
         let sql = "UPDATE alert_events SET peak_memory_mb = MAX(peak_memory_mb, ?) WHERE id = ? AND ended_at IS NULL;"
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            NSLog("DataStore: prepare failed in doUpdateAlertEventPeak: %@", String(cString: sqlite3_errmsg(db)))
+            return
+        }
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_double(stmt, 1, peakMemoryMB)
         sqlite3_bind_int64(stmt, 2, id)
