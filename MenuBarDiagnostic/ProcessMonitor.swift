@@ -327,6 +327,12 @@ class ProcessMonitor: ObservableObject {
         var childPIDs: Set<pid_t> = []
 
         // Pass 1: helpers that made it into processDict
+        // Known trade-off: for helpers whose memory is already *shared-accounted*
+        // inside the parent's VM space (e.g. certain in-process XPC services),
+        // adding their ri_phys_footprint here produces a small overcount.
+        // For the common case (Electron renderers, Chrome Helper, Safari WebContent)
+        // the processes are fully independent and their footprints are NOT included
+        // in the parent's ri_phys_footprint, so folding is correct.
         for pid in processDict.keys {
             if let ppid = ProcessSyscall.getParentPID(of: pid),
                processDict[ppid] != nil {
@@ -361,10 +367,23 @@ class ProcessMonitor: ObservableObject {
         // Build the final result array, excluding folded children.
         // Pre-size to avoid incremental buffer copies.
         var newProcesses: [MenuBarProcess] = []
-        newProcesses.reserveCapacity(processDict.count - childPIDs.count)
+        newProcesses.reserveCapacity(max(0, processDict.count - childPIDs.count))
 
         for (pid, proc) in processDict where !childPIDs.contains(pid) {
             if let bonus = parentMemBonus[pid] {
+                let combinedBytes = proc.memoryFootprintBytes + bonus
+                let combinedMB    = Double(combinedBytes) / 1_048_576.0
+
+                // Patch the last sample in memoryHistories so that:
+                //   (a) the sparkline's final data point matches the displayed value, and
+                //   (b) future ticks inherit the folded baseline rather than the raw one.
+                // Without this, the sparkline endpoint and the current-value label
+                // would show different numbers for any app with active helpers.
+                if var hist = memoryHistories[pid], !hist.isEmpty {
+                    hist[hist.count - 1] = combinedMB
+                    memoryHistories[pid] = hist
+                }
+
                 // Recreate the snapshot with the adjusted total memory so that the
                 // UI shows the true combined footprint of the app + its helpers.
                 newProcesses.append(MenuBarProcess(
@@ -374,8 +393,8 @@ class ProcessMonitor: ObservableObject {
                     icon: proc.icon,
                     cpuFraction: proc.cpuFraction,
                     cpuHistory: proc.cpuHistory,
-                    memoryHistory: proc.memoryHistory,
-                    memoryFootprintBytes: proc.memoryFootprintBytes + bonus,
+                    memoryHistory: memoryHistories[pid] ?? proc.memoryHistory,
+                    memoryFootprintBytes: combinedBytes,
                     thermalState: proc.thermalState,
                     launchDate: proc.launchDate
                 ))
