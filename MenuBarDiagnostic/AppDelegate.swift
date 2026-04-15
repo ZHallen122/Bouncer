@@ -46,6 +46,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     )
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.appearance = NSAppearance(named: .darkAqua)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem?.button {
