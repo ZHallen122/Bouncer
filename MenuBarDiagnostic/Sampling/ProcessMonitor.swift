@@ -68,15 +68,15 @@ class ProcessMonitor: ObservableObject {
     /// Maps each PID to its last-observed accumulated CPU nanoseconds and the
     /// wall-clock nanoseconds (`DispatchTime.now().uptimeNanoseconds`) at
     /// sample time. Used to compute per-interval CPU delta fractions.
-    private var previousSamples: [pid_t: (cpuNanos: UInt64, wallNanos: UInt64)] = [:]
+    var previousSamples: [pid_t: (cpuNanos: UInt64, wallNanos: UInt64)] = [:]
 
     /// Rolling CPU fraction history keyed by PID. Each entry is capped at 20
     /// samples; older entries are dropped as new ones arrive. Pruned when a
     /// process is no longer running.
-    private var cpuHistories: [pid_t: [Double]] = [:]
+    var cpuHistories: [pid_t: [Double]] = [:]
 
     /// Rolling memory footprint history (MB) keyed by PID. Capped at 20 samples.
-    private var memoryHistories: [pid_t: [Double]] = [:]
+    var memoryHistories: [pid_t: [Double]] = [:]
 
     /// Last-seen CPU tick counters from `host_statistics(HOST_CPU_LOAD_INFO)`.
     /// `nil` on the first sample; a non-nil value enables delta computation
@@ -94,7 +94,7 @@ class ProcessMonitor: ObservableObject {
 
     // MARK: - Static app property cache (accessed only on sampleQueue)
 
-    private struct AppStaticProperties {
+    struct AppStaticProperties {
         let name: String
         let bundleIdentifier: String?
         let bundleURL: URL?
@@ -103,14 +103,14 @@ class ProcessMonitor: ObservableObject {
         let activationPolicy: NSApplication.ActivationPolicy
     }
 
-    private enum AppStaticCacheResult {
+    enum AppStaticCacheResult {
         case notAnApp
         case app(AppStaticProperties)
     }
 
     /// Per-PID cache of static NSRunningApplication properties (don't change for a given PID).
     /// Populated on first encounter; pruned when the PID disappears from livePIDs.
-    private var appStaticCache: [pid_t: AppStaticCacheResult] = [:]
+    var appStaticCache: [pid_t: AppStaticCacheResult] = [:]
 
     // MARK: - Per-app lifecycle cache (accessed only on sampleQueue)
 
@@ -165,20 +165,6 @@ class ProcessMonitor: ObservableObject {
         }
     }
 
-    private func getActivePIDsFast() -> [pid_t] {
-        let type = UInt32(PROC_ALL_PIDS)
-        let bufferSize = proc_listpids(type, 0, nil, 0)
-        let paddedSize = bufferSize + Int32(MemoryLayout<pid_t>.stride * 50)
-        guard paddedSize > 0 else { return [] }
-        
-        var pids = [pid_t](repeating: 0, count: Int(paddedSize) / MemoryLayout<pid_t>.stride)
-        let bytesRead = proc_listpids(type, 0, &pids, paddedSize)
-        guard bytesRead > 0 else { return [] }
-        
-        let actualCount = Int(bytesRead) / MemoryLayout<pid_t>.stride
-        return Array(pids.prefix(actualCount))
-    }
-
     private func sampleOnQueue() {
         let thermalState = ProcessInfo.processInfo.thermalState
         let wallNow = DispatchTime.now().uptimeNanoseconds
@@ -187,234 +173,18 @@ class ProcessMonitor: ObservableObject {
         let activePIDsSet = Set(currentPIDs)
         var bundleURLMap: [String: URL] = [:]
 
-        // Keyed by PID for O(1) parent lookup during the grouping pass below.
-        // Pre-sized to the current PID count to avoid incremental reallocations.
-        var processDict: [pid_t: MenuBarProcess] = [:]
-        processDict.reserveCapacity(currentPIDs.count)
+        let processDict = buildProcessDict(currentPIDs: currentPIDs,
+                                           thermalState: thermalState,
+                                           wallNow: wallNow,
+                                           bundleURLMap: &bundleURLMap)
 
-        for pid in currentPIDs {
-            // Each iteration is wrapped in its own pool so ObjC temporaries created
-            // by NSRunningApplication (icon, localizedName, bundleURL, etc.) are
-            // released immediately rather than accumulating until the loop exits.
-            autoreleasepool {
-                guard pid > 0 else { return }
-                guard pid != ProcessInfo.processInfo.processIdentifier else { return }
-
-                // --- Strict IPC Guard ---
-                // NSRunningApplication(processIdentifier:) crosses an XPC boundary and is
-                // expensive. Only call it when the PID is NOT already in the static-info
-                // cache; every subsequent tick reads directly from the dictionary.
-                let staticProps: AppStaticProperties
-                if let result = appStaticCache[pid] {
-                    switch result {
-                    case .notAnApp: return
-                    case .app(let props): staticProps = props
-                    }
-                } else {
-                    guard let app = NSRunningApplication(processIdentifier: pid) else {
-                        appStaticCache[pid] = .notAnApp
-                        return
-                    }
-                    let props = AppStaticProperties(
-                        name: app.localizedName ?? "Unknown",
-                        bundleIdentifier: app.bundleIdentifier,
-                        bundleURL: app.bundleURL,
-                        icon: app.icon,
-                        launchDate: app.launchDate,
-                        activationPolicy: app.activationPolicy
-                    )
-                    appStaticCache[pid] = .app(props)
-                    staticProps = props
-                }
-
-                // Exclude background-only daemons with `.prohibited` policy
-                guard staticProps.activationPolicy != .prohibited else { return }
-
-                if let bid = staticProps.bundleIdentifier, let url = staticProps.bundleURL {
-                    bundleURLMap[bid] = url
-                }
-
-                var info = proc_taskinfo()
-                let infoSize = Int32(MemoryLayout<proc_taskinfo>.size)
-                let ret = proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &info, infoSize)
-                guard ret == infoSize else {
-                    // ret == 0 with errno ESRCH or EPERM means the process just exited —
-                    // normal race between runningApplications and actual exit; skip silently.
-                    let e = errno
-                    if ret != 0 || (e != ESRCH && e != EPERM) {
-                        NSLog("ProcessMonitor: proc_pidinfo failed for pid %d (ret=%d, errno=%d); skipping", pid, ret, e)
-                    }
-                    return
-                }
-
-                // Accumulated CPU time in nanoseconds (user + kernel threads combined).
-                let cpuNow = info.pti_total_user + info.pti_total_system
-
-                var cpuFraction: Double = 0.0
-                if let prev = previousSamples[pid] {
-                    // Guard against clock regression (should not happen, but defensive).
-                    let cpuDelta = cpuNow >= prev.cpuNanos ? cpuNow - prev.cpuNanos : 0
-                    // `wallDelta` falls back to 1 ns instead of 0 to avoid division
-                    // by zero if two samples land on the exact same uptime nanosecond.
-                    let wallDelta = wallNow > prev.wallNanos ? wallNow - prev.wallNanos : 1
-                    // Cap at 1.0: on multi-core systems `cpuDelta` can theoretically
-                    // exceed `wallDelta` if the process saturates more than one core,
-                    // but we report CPU as a fraction of a single logical core.
-                    cpuFraction = min(Double(cpuDelta) / Double(wallDelta), 1.0)
-                }
-
-                previousSamples[pid] = (cpuNanos: cpuNow, wallNanos: wallNow)
-
-                // Maintain a rolling window of the last 20 CPU fraction samples for sparkline display.
-                var history = cpuHistories[pid] ?? []
-                history.append(cpuFraction)
-                if history.count > 20 { history.removeFirst(history.count - 20) }
-                cpuHistories[pid] = history
-
-                // Read physical memory footprint via proc_pid_rusage (more accurate than
-                // pti_resident_size; matches Activity Monitor's "Memory" column).
-                //
-                // Pointer bridging: proc_pid_rusage expects a rusage_info_t* (pointer-to-pointer).
-                // We must rebind rusageInfo's own address to that type so the C function writes
-                // directly into our struct — NOT into a local pointer variable (&voidPtr), which
-                // is only 8 bytes and causes a stack-smashing SIGABRT.
-                var rusageInfo = rusage_info_v4()
-                let rusageRet = withUnsafeMutablePointer(to: &rusageInfo) { ptr in
-                    ptr.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { reboundPtr in
-                        proc_pid_rusage(pid, RUSAGE_INFO_V4, reboundPtr)
-                    }
-                }
-                guard rusageRet == 0 else {
-                    NSLog("ProcessMonitor: proc_pid_rusage failed for pid %d (rc=%d); skipping sample", pid, rusageRet)
-                    return
-                }
-                let memFootprint: UInt64 = rusageInfo.ri_phys_footprint
-
-                // Maintain a rolling window of the last 20 memory footprint samples (in MB).
-                var memHistory = memoryHistories[pid] ?? []
-                memHistory.append(Double(memFootprint) / 1_048_576.0)
-                if memHistory.count > 20 { memHistory.removeFirst(memHistory.count - 20) }
-                memoryHistories[pid] = memHistory
-
-                processDict[pid] = MenuBarProcess(
-                    pid: pid,
-                    name: staticProps.name,
-                    bundleIdentifier: staticProps.bundleIdentifier,
-                    icon: staticProps.icon,
-                    cpuFraction: cpuFraction,
-                    cpuHistory: history,
-                    memoryHistory: memHistory,
-                    memoryFootprintBytes: memFootprint,
-                    thermalState: thermalState,
-                    launchDate: staticProps.launchDate
-                )
-            }
-        }
-
-        // --- Process Grouping (Folding Helpers) ---
-        // Two-pass fold: accumulate child footprints into their parent app's total.
-        //
-        // Pass 1 — tracked apps: some helpers DO pass the NSRunningApplication /
-        // policy filter and land in processDict; fold those and remove from the list.
-        //
-        // Pass 2 — untracked helpers: most real-world helpers (Chrome Helper,
-        // Electron renderers, Safari WebContent, etc.) are filtered out earlier
-        // because NSRunningApplication returns nil or they carry .prohibited policy.
-        // They never enter processDict, so Pass 1 misses them entirely.
-        // We iterate over ALL currentPIDs a second time, skip anything already in
-        // processDict, call proc_pid_rusage directly, and fold their footprint in.
-        var parentMemBonus: [pid_t: UInt64] = [:]
-        var childPIDs: Set<pid_t> = []
-
-        // Pass 1: helpers that made it into processDict
-        // Known trade-off: for helpers whose memory is already *shared-accounted*
-        // inside the parent's VM space (e.g. certain in-process XPC services),
-        // adding their ri_phys_footprint here produces a small overcount.
-        // For the common case (Electron renderers, Chrome Helper, Safari WebContent)
-        // the processes are fully independent and their footprints are NOT included
-        // in the parent's ri_phys_footprint, so folding is correct.
-        for pid in processDict.keys {
-            if let ppid = ProcessSyscall.getParentPID(of: pid),
-               processDict[ppid] != nil {
-                parentMemBonus[ppid, default: 0] += processDict[pid]!.memoryFootprintBytes
-                childPIDs.insert(pid)
-            }
-        }
-
-        // Pass 2: helpers that were filtered out (not an app, or .prohibited policy)
-        // Each iteration is pooled to release any Swift/ObjC temporaries produced
-        // by the withUnsafeMutablePointer / withMemoryRebound closure machinery.
-        // No temporary collections are built here — parentMemBonus is updated in place.
-        for pid in currentPIDs {
-            autoreleasepool {
-                guard pid > 0, pid != ProcessInfo.processInfo.processIdentifier else { return }
-                guard processDict[pid] == nil else { return }  // already handled in pass 1
-
-                guard let ppid = ProcessSyscall.getParentPID(of: pid),
-                      processDict[ppid] != nil else { return }
-
-                var rusageInfo = rusage_info_v4()
-                let rusageRet = withUnsafeMutablePointer(to: &rusageInfo) { ptr in
-                    ptr.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { reboundPtr in
-                        proc_pid_rusage(pid, RUSAGE_INFO_V4, reboundPtr)
-                    }
-                }
-                guard rusageRet == 0 else { return }
-                parentMemBonus[ppid, default: 0] += rusageInfo.ri_phys_footprint
-            }
-        }
-
-        // Build the final result array, excluding folded children.
-        // Pre-size to avoid incremental buffer copies.
-        var newProcesses: [MenuBarProcess] = []
-        newProcesses.reserveCapacity(max(0, processDict.count - childPIDs.count))
-
-        for (pid, proc) in processDict where !childPIDs.contains(pid) {
-            if let bonus = parentMemBonus[pid] {
-                let combinedBytes = proc.memoryFootprintBytes + bonus
-                let combinedMB    = Double(combinedBytes) / 1_048_576.0
-
-                // Patch the last sample in memoryHistories so that:
-                //   (a) the sparkline's final data point matches the displayed value, and
-                //   (b) future ticks inherit the folded baseline rather than the raw one.
-                // Without this, the sparkline endpoint and the current-value label
-                // would show different numbers for any app with active helpers.
-                if var hist = memoryHistories[pid], !hist.isEmpty {
-                    hist[hist.count - 1] = combinedMB
-                    memoryHistories[pid] = hist
-                }
-
-                // Recreate the snapshot with the adjusted total memory so that the
-                // UI shows the true combined footprint of the app + its helpers.
-                newProcesses.append(MenuBarProcess(
-                    pid: proc.pid,
-                    name: proc.name,
-                    bundleIdentifier: proc.bundleIdentifier,
-                    icon: proc.icon,
-                    cpuFraction: proc.cpuFraction,
-                    cpuHistory: proc.cpuHistory,
-                    memoryHistory: memoryHistories[pid] ?? proc.memoryHistory,
-                    memoryFootprintBytes: combinedBytes,
-                    thermalState: proc.thermalState,
-                    launchDate: proc.launchDate
-                ))
-            } else {
-                newProcesses.append(proc)
-            }
-        }
+        let newProcesses = foldHelperProcesses(processDict: processDict, currentPIDs: currentPIDs)
 
         // Prune stale state for PIDs that are no longer running.
         // Use the full processDict keyset (includes folded children) so that
         // CPU-delta state is preserved for helper processes between ticks.
         let livePIDs = Set(processDict.keys)
-        previousSamples = previousSamples.filter { livePIDs.contains($0.key) }
-        cpuHistories = cpuHistories.filter { livePIDs.contains($0.key) }
-        memoryHistories = memoryHistories.filter { livePIDs.contains($0.key) }
-
-        let deadPIDs = Set(appStaticCache.keys).subtracting(activePIDsSet)
-        for deadPid in deadPIDs {
-            appStaticCache.removeValue(forKey: deadPid)
-        }
+        pruneStaleCaches(livePIDs: livePIDs, activePIDs: activePIDsSet)
 
         // No need to sort here, ProcessListViewModel sorts it later.
         let sorted = newProcesses
@@ -432,7 +202,7 @@ class ProcessMonitor: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.currentProcesses = sorted
-            
+
             // Limit SwiftUI objectWillChange firings by doing equality checks
             if self.isUIVisible {
                 self.processes = sorted
@@ -443,7 +213,7 @@ class ProcessMonitor: ObservableObject {
             } else {
                 // When UI is hidden, throttle memory updates to only when menu bar % changes
                 if self.memoryPressure != pressure { self.memoryPressure = pressure }
-                
+
                 if ramTotal > 0 && self.systemRAMTotalBytes > 0 {
                     let oldPerc = Int((Double(self.systemRAMUsedBytes) / Double(self.systemRAMTotalBytes) * 100).rounded())
                     let newPerc = Int((Double(ramUsed) / Double(ramTotal) * 100).rounded())
