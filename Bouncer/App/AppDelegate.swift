@@ -228,8 +228,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     // MARK: - NSPopoverDelegate
     
     func popoverWillShow(_ notification: Notification) {
-        processListViewModel.isPopoverVisible = true
+        // Order matters: flip the monitor's visibility flag FIRST so its didSet
+        // synchronously copies `currentProcesses` into the published `processes`
+        // array. Then mark the popover visible and synchronously recompute the
+        // display list — this guarantees the FIRST popover render has rows even
+        // if the async Combine pipeline hasn't fired yet.
         monitor.isUIVisible = true
+        processListViewModel.isPopoverVisible = true
+        processListViewModel.refreshNow(
+            monitor: monitor,
+            anomalyDetector: anomalyDetector,
+            prefs: prefs
+        )
     }
     
     func popoverDidClose(_ notification: Notification) {

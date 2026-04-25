@@ -202,10 +202,16 @@ class ProcessMonitor: ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             self.currentProcesses = sorted
+            // Always publish the latest process snapshot so ProcessListViewModel's
+            // Combine pipeline keeps `latestComputedProcesses` fresh even while the
+            // popover is hidden. Without this, the FIRST popover open renders an
+            // empty list because the pipeline never saw a non-empty snapshot.
+            self.processes = sorted
 
-            // Limit SwiftUI objectWillChange firings by doing equality checks
+            // Limit SwiftUI objectWillChange firings by doing equality checks.
+            // System stats stay throttled when the UI is hidden — only `processes`
+            // needs to always update for the popover's view-model pipeline.
             if self.isUIVisible {
-                self.processes = sorted
                 if self.systemCPUFraction != cpuFrac { self.systemCPUFraction = cpuFrac }
                 if self.systemRAMUsedBytes != ramUsed { self.systemRAMUsedBytes = ramUsed }
                 if self.systemRAMTotalBytes != ramTotal { self.systemRAMTotalBytes = ramTotal }
