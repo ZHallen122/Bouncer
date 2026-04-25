@@ -12,7 +12,7 @@ import Combine
 /// views avoid doing this work on every render cycle.
 final class ProcessListViewModel: ObservableObject {
     @Published var displayProcesses: [MenuBarProcess] = []
-    
+
     var isPopoverVisible: Bool = false {
         didSet {
             if isPopoverVisible && displayProcesses != latestComputedProcesses {
@@ -38,25 +38,11 @@ final class ProcessListViewModel: ObservableObject {
         )
         .receive(on: DispatchQueue.global(qos: .userInitiated))
         .map { processes, anomalousBundleIDs, ignoredRaw -> [MenuBarProcess] in
-            let ignored = Set(
-                ignoredRaw
-                    .split(separator: ",")
-                    .map { $0.trimmingCharacters(in: .whitespaces) }
-                    .filter { !$0.isEmpty }
+            Self.computeDisplayList(
+                processes: processes,
+                anomalousBundleIDs: anomalousBundleIDs,
+                ignoredRaw: ignoredRaw
             )
-            let sorted = processes
-                .filter { process in
-                    guard let bid = process.bundleIdentifier else { return true }
-                    return !ignored.contains(bid)
-                }
-                .sorted { p1, p2 in
-                    let a1 = anomalousBundleIDs.contains(p1.bundleIdentifier ?? "")
-                    let a2 = anomalousBundleIDs.contains(p2.bundleIdentifier ?? "")
-                    if a1 && !a2 { return true }
-                    if !a1 && a2 { return false }
-                    return p1.memoryFootprintBytes > p2.memoryFootprintBytes
-                }
-            return Array(sorted.prefix(15))
         }
         .receive(on: DispatchQueue.main)
         .sink { [weak self] newProcesses in
@@ -67,6 +53,47 @@ final class ProcessListViewModel: ObservableObject {
             }
         }
         .store(in: &cancellables)
+    }
+
+    /// Synchronously recompute and publish the display list from the current
+    /// monitor / detector / prefs state. Call from popoverWillShow so the FIRST
+    /// popover render has rows even if the async Combine pipeline hasn't fired yet.
+    func refreshNow(monitor: ProcessMonitor, anomalyDetector: AnomalyDetector, prefs: PreferencesManager) {
+        let computed = Self.computeDisplayList(
+            processes: monitor.processes,
+            anomalousBundleIDs: anomalyDetector.anomalousBundleIDs,
+            ignoredRaw: prefs.ignoredBundleIDsRaw
+        )
+        latestComputedProcesses = computed
+        if displayProcesses != computed {
+            displayProcesses = computed
+        }
+    }
+
+    private static func computeDisplayList(
+        processes: [MenuBarProcess],
+        anomalousBundleIDs: Set<String>,
+        ignoredRaw: String
+    ) -> [MenuBarProcess] {
+        let ignored = Set(
+            ignoredRaw
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+        )
+        let sorted = processes
+            .filter { process in
+                guard let bid = process.bundleIdentifier else { return true }
+                return !ignored.contains(bid)
+            }
+            .sorted { p1, p2 in
+                let a1 = anomalousBundleIDs.contains(p1.bundleIdentifier ?? "")
+                let a2 = anomalousBundleIDs.contains(p2.bundleIdentifier ?? "")
+                if a1 && !a2 { return true }
+                if !a1 && a2 { return false }
+                return p1.memoryFootprintBytes > p2.memoryFootprintBytes
+            }
+        return Array(sorted.prefix(15))
     }
 }
 
