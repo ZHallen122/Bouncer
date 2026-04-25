@@ -18,6 +18,11 @@ final class HUDWindow: NSPanel {
         titlebarAppearsTransparent = true
         isMovableByWindowBackground = true
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        // Force dark appearance so AppKit-backed bordered buttons (e.g. the
+        // destructive "Kill Process" button in ProcessDetailSheet) resolve
+        // `.tint(.red)` against a dark window appearance instead of desaturating
+        // when the system is in light mode.
+        appearance = NSAppearance(named: .darkAqua)
 
         let effect = NSVisualEffectView()
         effect.material = .hudWindow
