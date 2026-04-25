@@ -216,6 +216,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         pop.contentSize = NSSize(width: 300, height: 400)
         pop.behavior = .transient
         pop.delegate = self
+        // Force the popover's underlying NSWindow into dark mode so AppKit-backed
+        // bordered buttons resolve `.tint(.red)` against a dark appearance. Without
+        // this, SwiftUI's `.preferredColorScheme(.dark)` on the content view only
+        // updates the SwiftUI environment — bordered buttons read the host window's
+        // effectiveAppearance and desaturate the tint when the system is in light mode.
+        pop.appearance = NSAppearance(named: .darkAqua)
         self.popover = pop
     }
 
