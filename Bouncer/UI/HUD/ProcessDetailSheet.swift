@@ -43,8 +43,7 @@ struct ProcessDetailSheet: View {
                 Label("Kill Process", systemImage: "xmark.circle.fill")
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.red)
+            .buttonStyle(StableActionButtonStyle(color: .red, prominence: .filled))
         }
         .padding(20)
         .frame(width: 320)

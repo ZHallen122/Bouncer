@@ -371,16 +371,12 @@ private struct ProcessRowView: View {
                 Button("Quit App") {
                     quitApp()
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .tint(.red)
+                .buttonStyle(StableActionButtonStyle(color: .red, prominence: .tintedBorder))
                 .help("Force-quit this app")
                 Button("Restart App") {
                     restartApp()
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .tint(.orange)
+                .buttonStyle(StableActionButtonStyle(color: .orange, prominence: .filled))
                 .help("Quit and relaunch this app")
                 if isAnomalous {
                     Button("Add to Ignore List") {
@@ -389,8 +385,7 @@ private struct ProcessRowView: View {
                             prefs.ignoredBundleIDs.append(bid)
                         }
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(StableActionButtonStyle(color: .secondary, prominence: .tintedBorder))
                     .help("Stop alerting about this app")
                 }
             }

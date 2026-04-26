@@ -27,6 +27,7 @@
 		AA0000000000000000000062 /* Detection/AnomalyDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000061 /* Detection/AnomalyDetector.swift */; };
 		AA0000000000000000000064 /* Sampling/SwapMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000063 /* Sampling/SwapMonitor.swift */; };
 		AA0000000000000000000066 /* Sampling/ProcessSyscall.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000065 /* Sampling/ProcessSyscall.swift */; };
+		AA0000000000000000000068 /* UI/Controls/StableActionButtonStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000067 /* UI/Controls/StableActionButtonStyle.swift */; };
 		AA0000000000000000000101 /* Storage/DataStore+Schema.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000100 /* Storage/DataStore+Schema.swift */; };
 		AA0000000000000000000103 /* Storage/DataStore+Samples.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000102 /* Storage/DataStore+Samples.swift */; };
 		AA0000000000000000000105 /* Storage/DataStore+Baseline.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000104 /* Storage/DataStore+Baseline.swift */; };
@@ -96,6 +97,7 @@
 		AA0000000000000000000061 /* Detection/AnomalyDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Detection/AnomalyDetector.swift; sourceTree = "<group>"; };
 		AA0000000000000000000063 /* Sampling/SwapMonitor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sampling/SwapMonitor.swift; sourceTree = "<group>"; };
 		AA0000000000000000000065 /* Sampling/ProcessSyscall.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sampling/ProcessSyscall.swift; sourceTree = "<group>"; };
+		AA0000000000000000000067 /* UI/Controls/StableActionButtonStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UI/Controls/StableActionButtonStyle.swift; sourceTree = "<group>"; };
 		AA0000000000000000000100 /* Storage/DataStore+Schema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Storage/DataStore+Schema.swift"; sourceTree = "<group>"; };
 		AA0000000000000000000102 /* Storage/DataStore+Samples.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Storage/DataStore+Samples.swift"; sourceTree = "<group>"; };
 		AA0000000000000000000104 /* Storage/DataStore+Baseline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Storage/DataStore+Baseline.swift"; sourceTree = "<group>"; };
@@ -196,6 +198,7 @@
 				AA000000000000000000005F /* Sampling/MemoryPressure.swift */,
 				AA0000000000000000000061 /* Detection/AnomalyDetector.swift */,
 				AA0000000000000000000063 /* Sampling/SwapMonitor.swift */,
+				AA0000000000000000000067 /* UI/Controls/StableActionButtonStyle.swift */,
 				DD0000000000000000000002 /* App/IconColorLogic.swift */,
 				EE000000000000000000001B /* Assets.xcassets */,
 				EE000000000000000000003B /* Updates/SparkleUpdater.swift */,
@@ -364,6 +367,7 @@
 				AA0000000000000000000060 /* Sampling/MemoryPressure.swift in Sources */,
 				AA0000000000000000000062 /* Detection/AnomalyDetector.swift in Sources */,
 				AA0000000000000000000064 /* Sampling/SwapMonitor.swift in Sources */,
+				AA0000000000000000000068 /* UI/Controls/StableActionButtonStyle.swift in Sources */,
 				DD0000000000000000000001 /* App/IconColorLogic.swift in Sources */,
 				EE000000000000000000003A /* Updates/SparkleUpdater.swift in Sources */,
 				EE000000000000000000004A /* UI/Onboarding/OnboardingView.swift in Sources */,
