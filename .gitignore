@@ -23,6 +23,7 @@ build/
 # Swift Package Manager
 .swiftpm/
 Package.resolved
+!Bouncer.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 
 .autonomous/
 

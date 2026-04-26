@@ -31,7 +31,9 @@ The `"Bouncer"` scheme is not configured for testing. Use the dedicated test sch
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
 xcodebuild -project "Bouncer.xcodeproj" \
            -scheme "BouncerTests" \
-           -configuration Debug test
+           -configuration Debug \
+           -derivedDataPath build \
+           -destination "platform=macOS,arch=$(uname -m)" test
 ```
 
 All tests must pass before submitting a PR.
