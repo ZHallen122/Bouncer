@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.0.3] - 2026-04-25
+
+### Fixed
+
+- Made action button colors render consistently in release builds by drawing the red/orange button styling explicitly instead of relying on AppKit tint resolution.
+
 ## [1.0.2] - 2026-04-25
 
 ### Changed
